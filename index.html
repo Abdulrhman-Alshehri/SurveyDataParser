@@ -408,6 +408,16 @@
             color: #00A0AF;
         }
 
+        /* Card 4: All Together (Purple) */
+        .mode-card[data-mode="all"] {
+            background: linear-gradient(135deg, #6C3FA0, #9B6FD0);
+            color: white;
+        }
+
+        .mode-card[data-mode="all"] .card-number {
+            color: #6C3FA0;
+        }
+
         .card-title {
             font-size: 1.25rem;
             font-weight: 700;
@@ -456,6 +466,14 @@
                 <div class="card-title">Disputes</div>
                 <div class="card-desc">
                     Analyze shipment disputes, claims, and non-delivery complaints.
+                </div>
+            </div>
+
+            <div class="mode-card" data-mode="all" onclick="selectMode('all')">
+                <div class="card-number">04</div>
+                <div class="card-title">All Together</div>
+                <div class="card-desc">
+                    Process all types at once — surveys, undelivered, and disputes combined.
                 </div>
             </div>
         </div>
@@ -511,7 +529,7 @@
 
     <script>
         // --- Configuration & State ---
-        let currentMode = null; // survey, undelivered, dispute
+        let currentMode = null; // survey, undelivered, dispute, all
         let parsedData = [];
 
         // --- Column Definitions ---
@@ -536,9 +554,23 @@
             "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "hub_code"
         ];
 
+        const COLS_ALL = [
+            "Type", "Date", "Time", "Bot User", "Shipment Number",
+            "CSAT", "NPS", "Speed of Delivery", "Shipment Condition", "Courier Behavior",
+            "Payment Issue", "Improvement Suggestions",
+            "NDR Reason", "Dispute Reason", "NDR",
+            "Status", "Customer Name", "Service Code", "Order Reference",
+            "Currency", "Price",
+            "Consignee Name", "Consignee City", "Consignee Country", "Consignee Phone",
+            "Shipper Name", "Shipper City", "Shipper Country", "Shipper Phone",
+            "Customer ID Ref", "Incoterm",
+            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "hub_code"
+        ];
+
         function getColumns() {
             if (currentMode === 'undelivered') return COLS_UNDELIVERED;
             if (currentMode === 'dispute') return COLS_DISPUTE;
+            if (currentMode === 'all') return COLS_ALL;
             return COLS_SURVEY;
         }
 
@@ -569,6 +601,7 @@
             if (mode === 'survey') titleEl.innerText = "Upload Survey Export File";
             else if (mode === 'undelivered') titleEl.innerText = "Upload Undelivered/Invalid Reports";
             else if (mode === 'dispute') titleEl.innerText = "Upload Dispute Reports";
+            else if (mode === 'all') titleEl.innerText = "Upload Data File (All Types)";
         }
 
         // --- Debug Initialization ---
@@ -700,7 +733,7 @@
             ws['!cols'] = cols.map(() => ({ wch: 20 }));
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "Parsed Data");
-            XLSX.writeFile(wb, `Parsed_${currentMode}_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.xlsx`);
+            XLSX.writeFile(wb, `Parsed_${currentMode === 'all' ? 'All' : currentMode}_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.xlsx`);
         }
         function resetApp() {
             parsedData = [];
@@ -823,17 +856,29 @@
 
                 // Check Mode Compatibility
                 let isCompatible = false;
-                if (currentMode === 'survey' && cellContent.includes("Survey for shipment:")) isCompatible = true;
-                if (currentMode === 'undelivered' && (cellContent.includes("Undelivered -") || cellContent.includes("Invalid Reason:"))) isCompatible = true;
-                if (currentMode === 'dispute' && (cellContent.includes("Dispute"))) isCompatible = true;
+                let rowMode = currentMode;
+                if (currentMode === 'all') {
+                    // Detect type automatically
+                    if (cellContent.includes("Survey for shipment:")) { isCompatible = true; rowMode = 'survey'; }
+                    else if (cellContent.includes("Undelivered -") || cellContent.includes("Invalid Reason:")) { isCompatible = true; rowMode = 'undelivered'; }
+                    else if (cellContent.includes("Dispute")) { isCompatible = true; rowMode = 'dispute'; }
+                } else {
+                    if (currentMode === 'survey' && cellContent.includes("Survey for shipment:")) isCompatible = true;
+                    if (currentMode === 'undelivered' && (cellContent.includes("Undelivered -") || cellContent.includes("Invalid Reason:"))) isCompatible = true;
+                    if (currentMode === 'dispute' && (cellContent.includes("Dispute"))) isCompatible = true;
+                }
 
                 if (!isCompatible) continue;
 
-                const parsed = parseRowString(cellContent, currentMode);
+                const parsed = parseRowString(cellContent, rowMode);
                 if (parsed) {
                     parsed["Date"] = dateStr;
                     parsed["Time"] = timeStr;
                     parsed["Bot User"] = botUser;
+                    if (currentMode === 'all') {
+                        const typeLabels = { survey: 'Survey', undelivered: 'Undelivered / Invalid', dispute: 'Dispute' };
+                        parsed["Type"] = typeLabels[rowMode] || rowMode;
+                    }
                     parsedData.push(parsed);
                 }
             }
