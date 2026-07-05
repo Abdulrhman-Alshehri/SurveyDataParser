@@ -534,12 +534,10 @@
 
         // --- Column Definitions ---
         const COLS_SURVEY = [
-            "Date", "Time", "Bot User", "Shipment Number", "CSAT", "NPS", "Speed of Delivery",
-            "Shipment Condition", "Courier Behavior", "Payment Issue", "Improvement Suggestions",
-            "Status", "Customer Name", "Service Code", "Order Reference", "Currency", "Price",
-            "Consignee Name", "Consignee City", "Consignee Country", "Consignee Phone",
-            "Shipper Name", "Shipper City", "Shipper Country", "Shipper Phone",
-            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "hub_code"
+            "mobile", "track_number", "customer_name", "worker_name", "worker_code", "worker_phone",
+            "hub_code", "delivery_date", "delivery_time", "SubmittedAt", "NPS", "CSAT_Overall",
+            "SpeedOfDelivery", "ShipmentCondition", "CourierBehavior", "isCOD",
+            "Verbatim_Improvment", "Payment Issue"
         ];
 
         const COLS_UNDELIVERED = [
@@ -555,11 +553,11 @@
         ];
 
         const COLS_ALL = [
-            "Type", "Date", "Time", "Bot User", "Shipment Number",
-            "CSAT", "NPS", "Speed of Delivery", "Shipment Condition", "Courier Behavior",
-            "Payment Issue", "Improvement Suggestions",
+            "Type", "Date", "Time", "Bot User", "track_number",
+            "CSAT_Overall", "NPS", "SpeedOfDelivery", "ShipmentCondition", "CourierBehavior",
+            "Payment Issue", "Verbatim_Improvment",
             "NDR Reason", "Dispute Reason", "NDR",
-            "Status", "Customer Name", "Service Code", "Order Reference",
+            "Status", "customer_name", "Service Code", "Order Reference",
             "Currency", "Price",
             "Consignee Name", "Consignee City", "Consignee Country", "Consignee Phone",
             "Shipper Name", "Shipper City", "Shipper Country", "Shipper Phone",
@@ -669,7 +667,7 @@
                 for (let i = 0; i < parsedData.length; i += batchSize) {
                     const batch = parsedData.slice(i, i + batchSize);
                     await Promise.all(batch.map(async (item) => {
-                        const ref = item["Shipment Number"];
+                        const ref = item["track_number"] || item["Shipment Number"];
                         if (ref) {
                             try {
                                 const apiResp = await fetchShipmentData(ref);
@@ -677,6 +675,10 @@
                                     // Get courier_partner from root level of API response
                                     const rawPartner = apiResp.courier_partner;
                                     item.courier_partner = (!rawPartner || rawPartner.toUpperCase() === 'SELF') ? 'SELF' : rawPartner;
+
+                                    // Customer mobile and COD flag from root of API response
+                                    item.mobile = (apiResp.destination_details && apiResp.destination_details.phone) || '';
+                                    item.isCOD = apiResp.is_cod ? 'Yes' : 'No';
 
                                     // Get rider info from delivered event if available
                                     if (apiResp.events) {
@@ -875,6 +877,7 @@
                     parsed["Date"] = dateStr;
                     parsed["Time"] = timeStr;
                     parsed["Bot User"] = botUser;
+                    parsed["SubmittedAt"] = [dateStr, timeStr].filter(Boolean).join(" ");
                     if (currentMode === 'all') {
                         const typeLabels = { survey: 'Survey', undelivered: 'Undelivered / Invalid', dispute: 'Dispute' };
                         parsed["Type"] = typeLabels[rowMode] || rowMode;
@@ -903,28 +906,15 @@
                 const shipmentPart = parts[1] || "";
 
                 return {
-                    "Shipment Number": extract(/Survey for shipment:\s*([^,]+)/i, surveyPart) || shipment_num,
-                    "CSAT": extract(/(?:Overall Experience:|How was your experience\?)\s*(\d+)/i, surveyPart),
+                    "track_number": extract(/Survey for shipment:\s*([^,]+)/i, surveyPart) || shipment_num,
+                    "customer_name": extract(/customer name:\s*([^,]+)/i, shipmentPart),
+                    "CSAT_Overall": extract(/(?:Overall Experience:|How was your experience\?)\s*(\d+)/i, surveyPart),
                     "NPS": extract(/Recommendation Rate:\s*(\d+)/i, surveyPart),
-                    "Speed of Delivery": extract(/(?:Delivery Speed:|How is delivery speed\?)\s*(\d+)/i, surveyPart),
-                    "Shipment Condition": extract(/(?:Package Condition:|How was package condition\?)\s*(\d+)/i, surveyPart),
-                    "Courier Behavior": extract(/(?:Courier's Behavior:|Was the courier's behavior good\?)\s*(\d+)/i, surveyPart),
+                    "SpeedOfDelivery": extract(/(?:Delivery Speed:|How is delivery speed\?)\s*(\d+)/i, surveyPart),
+                    "ShipmentCondition": extract(/(?:Package Condition:|How was package condition\?)\s*(\d+)/i, surveyPart),
+                    "CourierBehavior": extract(/(?:Courier's Behavior:|Was the courier's behavior good\?)\s*(\d+)/i, surveyPart),
                     "Payment Issue": extract(/(?:Payment Issue:|Any payment issue\?)\s*([^,]+)/i, surveyPart),
-                    "Improvement Suggestions": extract(/(?:Suggestions:|How can we improve\?)\s*([^,]+)/i, surveyPart),
-                    "Status": extract(/status:\s*([^,]+)/i, shipmentPart),
-                    "Customer Name": extract(/customer name:\s*([^,]+)/i, shipmentPart),
-                    "Service Code": extract(/service code:\s*([^,]+)/i, shipmentPart),
-                    "Order Reference": extract(/order reference:\s*([^,]+)/i, shipmentPart),
-                    "Currency": extract(/currency:\s*([^,]+)/i, shipmentPart),
-                    "Price": extract(/price:\s*([^,]+)/i, shipmentPart),
-                    "Consignee Name": extract(/consignee name:\s*([^,]+)/i, shipmentPart),
-                    "Consignee City": extract(/consignee city:\s*([^,]+)/i, shipmentPart),
-                    "Consignee Country": extract(/consignee country:\s*([^,]+)/i, shipmentPart),
-                    "Consignee Phone": extract(/consignee phone:\s*([^,]+)/i, shipmentPart),
-                    "Shipper Name": extract(/shipper name:\s*([^,]+)/i, shipmentPart),
-                    "Shipper City": extract(/shipper city:\s*([^,]+)/i, shipmentPart),
-                    "Shipper Country": extract(/shipper country:\s*([^,]+)/i, shipmentPart),
-                    "Shipper Phone": extract(/shipper phone:\s*([^,]+)/i, shipmentPart)
+                    "Verbatim_Improvment": extract(/(?:Suggestions:|How can we improve\?)\s*([^,]+)/i, surveyPart)
                 };
             }
 
@@ -932,9 +922,11 @@
                 // Example: Undelivered - Invalid Reason: for shipment: S0006314778, ndr: NO RESPONSE - لا يوجد رد, status: Delivery Attempted, customer name: ...
                 return {
                     "Shipment Number": shipment_num,
+                    "track_number": shipment_num,
                     "NDR Reason": extract(/ndr:\s*([^,]+)/i, safeText),
                     "Status": extract(/status:\s*([^,]+)/i, safeText),
                     "Customer Name": customer_name,
+                    "customer_name": customer_name,
                     "Service Code": service_code,
                     "Order Reference": order_ref,
                     "Customer ID Ref": extract(/customer id reference:\s*([^,]+)/i, safeText),
@@ -946,10 +938,12 @@
                 // Example: Dispute - Not delivered: for shipment: ... ndr: ... status: ...
                 return {
                     "Shipment Number": shipment_num,
+                    "track_number": shipment_num,
                     "Dispute Reason": extract(/Dispute - ([^:]+):/i, safeText) || "Dispute",
                     "NDR": extract(/ndr:\s*([^,]+)/i, safeText),
                     "Status": extract(/status:\s*([^,]+)/i, safeText),
                     "Customer Name": customer_name,
+                    "customer_name": customer_name,
                     "Service Code": service_code,
                     "Order Reference": order_ref
                 };
