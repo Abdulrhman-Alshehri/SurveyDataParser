@@ -1183,17 +1183,20 @@
                     parsed["Bot User"] = botUser;
                     parsed["User Channel ID"] = userChannelId;
                     parsed["Job Done Name"] = cellContent;
-                    // Format SubmittedAt in Saudi local time (Asia/Riyadh) from the
-                    // original event timestamp — avoids UTC offset issues.
+                    // Format SubmittedAt in Saudi local time (UTC+3).
+                    // Manually offset from UTC to avoid browser locale quirks.
                     if (rawEventTime && typeof rawEventTime === 'string' && rawEventTime.includes("T")) {
                         const dtObj = new Date(rawEventTime);
                         if (!isNaN(dtObj)) {
-                            parsed["SubmittedAt"] = dtObj.toLocaleString("en-US", {
-                                month: "short", day: "numeric",
-                                hour: "numeric", minute: "2-digit",
-                                hour12: true,
-                                timeZone: "Asia/Riyadh"
-                            });
+                            const saudi = new Date(dtObj.getTime() + 3 * 60 * 60 * 1000);
+                            const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                            const mon = MON[saudi.getUTCMonth()];
+                            const day = saudi.getUTCDate();
+                            const hh  = saudi.getUTCHours();
+                            const mm  = saudi.getUTCMinutes();
+                            const ampm = hh >= 12 ? "PM" : "AM";
+                            const h12  = hh % 12 || 12;
+                            parsed["SubmittedAt"] = `${mon} ${day}, ${h12}:${String(mm).padStart(2, "0")} ${ampm}`;
                         } else {
                             parsed["SubmittedAt"] = rawEventTime;
                         }
