@@ -7,6 +7,8 @@ A web-based tool designed to parse customer survey data (exported from Excel/CSV
 - **Drag & Drop Upload**: Support for `.xlsx` and `.csv` files.
 - **Automated Parsing**: Uses Regular Expressions to extract survey responses (CSAT, NPS, Comments) from unstructured text fields.
 - **Data Enrichment**: Automatically fetches shipment details (Worker Name, Hub Code, Delivery Time) for each record via a secure backend proxy.
+- **Missing Shipment Linkage**: Detects records whose "Job Done Name" has no valid shipment number (e.g. unresolved `{{track_number}}` templates) and links them to the customer's other shipments using the "User Channel ID" (mobile number). Each record is tagged with a Match Status (`ok`, `found`, or `no_shipment_found`) and never has a shipment number guessed for it.
+- **Delivery Date Filter**: A date-range picker on the results page removes shipments whose delivery date falls outside the selected range from both the table and the export.
 - **Excel Export**: Download the fully processed and enriched dataset as a clean Excel file.
 - **Responsive Design**: Modern UI with real-time progress indicators.
 
