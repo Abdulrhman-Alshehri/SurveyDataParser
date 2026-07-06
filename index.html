@@ -1183,22 +1183,22 @@
                     parsed["Bot User"] = botUser;
                     parsed["User Channel ID"] = userChannelId;
                     parsed["Job Done Name"] = cellContent;
-                    // Format SubmittedAt from already-parsed UTC strings — no Date round-trip
-                    const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
-                                        "Jul","Aug","Sep","Oct","Nov","Dec"];
-                    if (dateStr) {
-                        const [_y, _m, _d] = dateStr.split("-").map(Number);
-                        const mon = MONTH_ABBR[_m - 1] || _m;
-                        let timePart = "";
-                        if (timeStr) {
-                            const [hh, mm] = timeStr.split(":").map(Number);
-                            const ampm = hh >= 12 ? "PM" : "AM";
-                            const h12 = hh % 12 || 12;
-                            timePart = `, ${h12}:${String(mm).padStart(2, "0")} ${ampm}`;
+                    // Format SubmittedAt in Saudi local time (Asia/Riyadh) from the
+                    // original event timestamp — avoids UTC offset issues.
+                    if (rawEventTime && typeof rawEventTime === 'string' && rawEventTime.includes("T")) {
+                        const dtObj = new Date(rawEventTime);
+                        if (!isNaN(dtObj)) {
+                            parsed["SubmittedAt"] = dtObj.toLocaleString("en-US", {
+                                month: "short", day: "numeric",
+                                hour: "numeric", minute: "2-digit",
+                                hour12: true,
+                                timeZone: "Asia/Riyadh"
+                            });
+                        } else {
+                            parsed["SubmittedAt"] = rawEventTime;
                         }
-                        parsed["SubmittedAt"] = `${mon} ${_d}${timePart}`;
                     } else {
-                        parsed["SubmittedAt"] = "";
+                        parsed["SubmittedAt"] = rawEventTime || "";
                     }
                     if (currentMode === 'all') {
                         const typeLabels = { survey: 'Survey', undelivered: 'Undelivered / Invalid', dispute: 'Dispute' };
