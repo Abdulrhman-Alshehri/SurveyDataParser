@@ -582,18 +582,12 @@
 
         // --- Column Definitions ---
         const COLS_SURVEY = [
-            "Date", "Time", "Bot User",
-            "track_number", "Shipment Number", "Match Status", "Related Shipments",
-            "User Channel ID", "mobile", "Consignee Phone",
-            "customer_name", "Status", "Service Code", "Order Reference", "Customer ID Ref",
-            "Incoterm", "Currency", "Price", "isCOD",
-            "CSAT_Overall", "NPS", "SpeedOfDelivery", "ShipmentCondition", "CourierBehavior",
-            "Issues", "Payment Issue", "Verbatim_Improvment",
-            "Consignee Name", "Consignee City", "Consignee Country",
-            "Shipper Name", "Shipper City", "Shipper Country", "Shipper Phone",
-            "courier_partner", "worker_name", "worker_code", "worker_phone",
+            "mobile", "track_number", "customer_name",
+            "worker_name", "worker_code", "worker_phone",
             "hub_code", "delivery_date", "delivery_time",
-            "Job Done Name"
+            "SubmittedAt",
+            "NPS", "CSAT_Overall", "SpeedOfDelivery", "ShipmentCondition", "CourierBehavior",
+            "COD", "Verbatim_Improvment", "Payment Issue"
         ];
 
         const COLS_UNDELIVERED = [
@@ -678,9 +672,11 @@
             else if (currentMode === 'dispute') base = COLS_DISPUTE;
             else if (currentMode === 'all') base = COLS_ALL;
             else base = COLS_SURVEY;
-            // Append linkage columns, de-duplicated (some modes already carry "Shipment Number").
             const cols = base.slice();
-            LINKAGE_COLS.forEach(c => { if (!cols.includes(c)) cols.push(c); });
+            // Only append linkage columns for non-survey modes
+            if (currentMode !== 'survey') {
+                LINKAGE_COLS.forEach(c => { if (!cols.includes(c)) cols.push(c); });
+            }
             return cols;
         }
 
@@ -910,7 +906,7 @@
 
                                     // Customer mobile and COD flag from root of API response
                                     item.mobile = (apiResp.destination_details && apiResp.destination_details.phone) || '';
-                                    item.isCOD = apiResp.is_cod ? 'Yes' : 'No';
+                                    item["COD"] = apiResp.is_cod ? 'الدفع عند الاستلام' : 'مدفوعة مسبقاً';
 
                                     // Get rider info from delivered event if available
                                     if (apiResp.events) {
@@ -1187,7 +1183,23 @@
                     parsed["Bot User"] = botUser;
                     parsed["User Channel ID"] = userChannelId;
                     parsed["Job Done Name"] = cellContent;
-                    parsed["SubmittedAt"] = [dateStr, timeStr].filter(Boolean).join(" ");
+                    // Format SubmittedAt from already-parsed UTC strings — no Date round-trip
+                    const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
+                                        "Jul","Aug","Sep","Oct","Nov","Dec"];
+                    if (dateStr) {
+                        const [_y, _m, _d] = dateStr.split("-").map(Number);
+                        const mon = MONTH_ABBR[_m - 1] || _m;
+                        let timePart = "";
+                        if (timeStr) {
+                            const [hh, mm] = timeStr.split(":").map(Number);
+                            const ampm = hh >= 12 ? "PM" : "AM";
+                            const h12 = hh % 12 || 12;
+                            timePart = `, ${h12}:${String(mm).padStart(2, "0")} ${ampm}`;
+                        }
+                        parsed["SubmittedAt"] = `${mon} ${_d}${timePart}`;
+                    } else {
+                        parsed["SubmittedAt"] = "";
+                    }
                     if (currentMode === 'all') {
                         const typeLabels = { survey: 'Survey', undelivered: 'Undelivered / Invalid', dispute: 'Dispute' };
                         parsed["Type"] = typeLabels[rowMode] || rowMode;
