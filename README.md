@@ -7,7 +7,7 @@ A web-based tool designed to parse customer survey data (exported from Excel/CSV
 - **Drag & Drop Upload**: Support for `.xlsx` and `.csv` files.
 - **Automated Parsing**: Uses Regular Expressions to extract survey responses (CSAT, NPS, Comments) from unstructured text fields.
 - **Data Enrichment**: Automatically fetches shipment details (Worker Name, Hub Code, Delivery Time) for each record via a secure backend proxy.
-- **Missing Shipment Linkage**: Detects records whose "Job Done Name" has no valid shipment number (e.g. unresolved `{{track_number}}` templates) and links them to the customer's other shipments using the "User Channel ID" (mobile number). Each record is tagged with a Match Status (`ok`, `found`, or `no_shipment_found`) and never has a shipment number guessed for it.
+- **Missing Shipment Linkage**: Detects records whose "Job Done Name" has no valid shipment number (e.g. unresolved `{{track_number}}` templates) and links them to the customer's other shipments using the "User Channel ID" (mobile number). It first checks for sibling rows sharing that mobile within the same uploaded file, then falls back to a live tracking lookup by mobile (the same endpoint the "Extract Shipment" tool uses) for anything still unresolved. Each record is tagged with a Match Status (`ok`, `found`, `no_shipment_found`, or `lookup_error`) and never has a shipment number guessed for it. `no_shipment_found` is only set once the live lookup itself confirms zero shipments for that mobile number.
 - **Delivery Date Filter**: A date-range picker on the results page removes shipments whose delivery date falls outside the selected range from both the table and the export.
 - **Excel Export**: Download the fully processed and enriched dataset as a clean Excel file.
 - **Responsive Design**: Modern UI with real-time progress indicators.
@@ -26,7 +26,8 @@ A web-based tool designed to parse customer survey data (exported from Excel/CSV
 ├── xlsx.full.min.js             # SheetJS library
 ├── netlify/
 │   └── functions/
-│       └── track.js             # Serverless function to proxy Shipsy API requests
+│       ├── track.js             # Serverless function to proxy Shipsy API requests
+│       └── lookup-shipments.js  # Serverless function to look up shipments by mobile (Starlinks API)
 ├── font/                        # Custom font files
 ├── logo.png                     # Application logo
 └── .env                         # Environment variables (local dev)
@@ -51,6 +52,8 @@ A web-based tool designed to parse customer survey data (exported from Excel/CSV
    ```env
    SHIPSY_API_URL=https://api.shipsy.in/api/client/track
    SHIPSY_API_KEY=your_actual_api_key_here
+   STARLINKS_API_URL=https://starlinksapi.app/api/v1/shipments/get-list
+   STARLINKS_API_KEY=your_actual_starlinks_api_key_here
    ```
 
 3. **Start the Development Server**:
@@ -69,6 +72,8 @@ This project is configured for **Netlify**.
 3. **Set Environment Variables**: In the Netlify Dashboard (Site Settings > Build & deploy > Environment), add:
     - `SHIPSY_API_URL`
     - `SHIPSY_API_KEY`
+    - `STARLINKS_API_URL` (optional — defaults to `https://starlinksapi.app/api/v1/shipments/get-list`)
+    - `STARLINKS_API_KEY`
 4. **Deploy**: Trigger a deployment.
 
 ## 📝 Usage Guide
@@ -81,4 +86,5 @@ This project is configured for **Netlify**.
 ## ⚠️ Troubleshooting
 
 - **"Missing API Key"**: Ensure `SHIPSY_API_KEY` is set in your environment variables.
+- **Match Status stuck on `lookup_error`**: Ensure `STARLINKS_API_KEY` is set in your environment variables — this is required for the Step 2 live mobile-number lookup used by the missing-shipment linkage feature.
 - **CORS Errors**: The Netlify function helps avoid CORS issues by proxying requests. Ensure you are hitting the local function (`/.netlify/functions/track`) and not the external API directly from the browser.
