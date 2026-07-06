@@ -674,10 +674,41 @@
             return cols;
         }
 
+        // Live tracking lookup by mobile number (Step 2 fallback). Proxies through the
+        // same "get-list" endpoint the dashboard's "Extract Shipment" search box uses,
+        // via a Netlify function so the upstream API key never reaches the browser.
+        async function fetchShipmentsByMobile(mobile) {
+            try {
+                const url = `/.netlify/functions/lookup-shipments?mobile=${encodeURIComponent(mobile)}`;
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error(`Mobile lookup API error for ${mobile}: ${response.status} ${response.statusText}`, errorText);
+                    return { ok: false, shipments: [] };
+                }
+                const data = await response.json();
+                return { ok: true, shipments: Array.isArray(data) ? data : [] };
+            } catch (err) {
+                console.error(`Mobile lookup API exception for ${mobile}:`, err);
+                return { ok: false, shipments: [] };
+            }
+        }
+
         // Step 1 (detect missing shipment number) + Step 2 (look up related shipments by
         // User Channel ID). Never guesses a single shipment number for a flagged record —
-        // any matches found by mobile are surfaced separately in "Related Shipments".
-        function applyShipmentLinkage(records) {
+        // any matches found are surfaced separately in "Related Shipments".
+        //
+        // Step 2 first checks for sibling rows in the SAME uploaded file that share this
+        // mobile number. If none exist, it does NOT give up — it queries the live
+        // tracking API for that mobile via fetchShipmentsByMobile, the same endpoint the
+        // dashboard's "Extract Shipment" tool uses. "no_shipment_found" is only set when
+        // that live call itself returns zero shipments; a failed/unreachable call is
+        // reported separately as "lookup_error" so it is never mistaken for a confirmed
+        // absence of shipments.
+        async function applyShipmentLinkage(records, onProgress) {
             // Build a mobile -> [shipments that have a real number] index.
             const index = {};
             records.forEach((r, i) => {
@@ -693,6 +724,7 @@
                 }
             });
 
+            const needsLiveLookup = [];
             records.forEach((r, i) => {
                 const own = resolveShipmentNumber(r);
                 if (own) {
@@ -715,11 +747,37 @@
                         .map(s => s.date ? `${s.shipment} [${s.date}]` : s.shipment)
                         .join("; ");
                     r["Match Status"] = "found";
+                } else if (mob) {
+                    needsLiveLookup.push({ row: r, mob });
                 } else {
                     r["Related Shipments"] = "";
                     r["Match Status"] = "no_shipment_found";
                 }
             });
+
+            const batchSize = 10;
+            for (let i = 0; i < needsLiveLookup.length; i += batchSize) {
+                const batch = needsLiveLookup.slice(i, i + batchSize);
+                await Promise.all(batch.map(async ({ row, mob }) => {
+                    const { ok, shipments } = await fetchShipmentsByMobile(mob);
+                    if (!ok) {
+                        row["Related Shipments"] = "";
+                        row["Match Status"] = "lookup_error";
+                        return;
+                    }
+                    if (shipments.length) {
+                        row["Related Shipments"] = shipments
+                            .filter(s => s.track_number)
+                            .map(s => s.status ? `${s.track_number} [${s.status}]` : s.track_number)
+                            .join("; ");
+                        row["Match Status"] = "found";
+                    } else {
+                        row["Related Shipments"] = "";
+                        row["Match Status"] = "no_shipment_found";
+                    }
+                }));
+                if (onProgress) onProgress(Math.min(i + batchSize, needsLiveLookup.length), needsLiveLookup.length);
+            }
         }
 
         // --- Mode Selection Logic ---
@@ -1027,7 +1085,7 @@
             reader.readAsArrayBuffer(file);
         }
 
-        function processRows(rows) {
+        async function processRows(rows) {
             parsedData = [];
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
@@ -1097,8 +1155,13 @@
                     parsedData.push(parsed);
                 }
             }
-            // Steps 1-2: flag missing shipment numbers and link related shipments by mobile.
-            applyShipmentLinkage(parsedData);
+            // Steps 1-2: flag missing shipment numbers, link related shipments by mobile
+            // from within the file, then fall back to a live tracking lookup by mobile
+            // for anything still unresolved.
+            showLoading(true, "Linking related shipments...");
+            await applyShipmentLinkage(parsedData, (done, total) => {
+                showLoading(true, `Looking up shipments by mobile number (${done}/${total})...`);
+            });
             // Automatically fetch API data after parsing
             fetchApiData();
         }
