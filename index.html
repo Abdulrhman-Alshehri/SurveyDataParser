@@ -582,10 +582,18 @@
 
         // --- Column Definitions ---
         const COLS_SURVEY = [
-            "mobile", "track_number", "customer_name", "worker_name", "worker_code", "worker_phone",
-            "hub_code", "delivery_date", "delivery_time", "SubmittedAt", "NPS", "CSAT_Overall",
-            "SpeedOfDelivery", "ShipmentCondition", "CourierBehavior", "isCOD",
-            "Verbatim_Improvment", "Payment Issue"
+            "Date", "Time", "Bot User",
+            "track_number", "Shipment Number", "Match Status", "Related Shipments",
+            "User Channel ID", "mobile", "Consignee Phone",
+            "customer_name", "Status", "Service Code", "Order Reference", "Customer ID Ref",
+            "Incoterm", "Currency", "Price", "isCOD",
+            "CSAT_Overall", "NPS", "SpeedOfDelivery", "ShipmentCondition", "CourierBehavior",
+            "Issues", "Payment Issue", "Verbatim_Improvment",
+            "Consignee Name", "Consignee City", "Consignee Country",
+            "Shipper Name", "Shipper City", "Shipper Country", "Shipper Phone",
+            "courier_partner", "worker_name", "worker_code", "worker_phone",
+            "hub_code", "delivery_date", "delivery_time",
+            "Job Done Name"
         ];
 
         const COLS_UNDELIVERED = [
@@ -1000,7 +1008,14 @@
             const data = getFilteredData();
             if (data.length === 0) { alert("No data to export"); return; }
             const cols = getColumns();
-            const ws = XLSX.utils.json_to_sheet(data, { header: cols });
+            // Project each row onto exactly the defined columns so the export never
+            // sprouts stray, out-of-order columns from extra keys left on the objects.
+            const projected = data.map(row => {
+                const o = {};
+                cols.forEach(c => { o[c] = row[c] != null ? row[c] : ""; });
+                return o;
+            });
+            const ws = XLSX.utils.json_to_sheet(projected, { header: cols });
             ws['!cols'] = cols.map(() => ({ wch: 20 }));
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "Parsed Data");
@@ -1196,13 +1211,39 @@
             fetchApiData();
         }
 
+        // Splits a "Key: value, Key2: value2, …" segment into a map keyed by the
+        // given labels. Tolerant of values that themselves contain commas (an
+        // "Issues: تأخر, سلوك" list, a multi-word name, …): each label's value is
+        // everything between that label and the next recognised label, so nothing is
+        // truncated at the first comma.
+        function parseLabeledSegment(segment, labels) {
+            const out = {};
+            if (!segment) return out;
+            const found = [];
+            labels.forEach(label => {
+                const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const m = segment.match(new RegExp('(?:^|[,|\\s])' + esc + '\\s*:', 'i'));
+                if (m) found.push({ label, keyStart: m.index, valStart: m.index + m[0].length });
+            });
+            found.sort((a, b) => a.keyStart - b.keyStart);
+            for (let i = 0; i < found.length; i++) {
+                const end = i + 1 < found.length ? found[i + 1].keyStart : segment.length;
+                out[found[i].label.toLowerCase()] = segment.slice(found[i].valStart, end)
+                    .replace(/[,|]+\s*$/, '').trim();
+            }
+            return out;
+        }
+
         function parseRowString(text, mode) {
             const safeText = text || "";
             // Helper to clean and extract
             const extract = (pattern, source) => { const match = source.match(pattern); return match ? match[1].trim() : ""; };
 
-            // Common Extractions
-            const shipment_num = extract(/(?:shipment:|shipment)\s*([A-Z0-9]+)/i, safeText) || extract(/S\d{9,}/, safeText);
+            // Common Extractions. The shipment-number regex requires an explicit
+            // "shipment:" label so it can never latch onto the "Shipment Details:"
+            // heading in the enriched tail — that mismatch previously produced
+            // track_number / Shipment Number values of literally "Details".
+            const shipment_num = extract(/shipment:\s*([A-Z0-9]+)/i, safeText) || extract(/\bS\d{9,}\b/, safeText);
             const customer_name = extract(/customer name:\s*([^,]+)/i, safeText);
             const service_code = extract(/service code:\s*([^,]+)/i, safeText);
             const order_ref = extract(/order reference:\s*([^,]+)/i, safeText);
@@ -1212,16 +1253,57 @@
                 const surveyPart = parts[0] || "";
                 const shipmentPart = parts[1] || "";
 
+                // Survey scores + free-text fields (values may contain commas).
+                const sv = parseLabeledSegment(surveyPart, [
+                    "Overall Experience", "Recommendation Rate", "Delivery Speed",
+                    "Package Condition", "Courier's Behavior", "Issues",
+                    "Payment Issue", "Payment Details", "Suggestions"
+                ]);
+                // Enriched "Shipment Details" tail after the ||| — previously discarded
+                // except for the customer name; now surfaced as its own columns.
+                const sd = parseLabeledSegment(shipmentPart, [
+                    "status", "customer name", "service code", "order reference",
+                    "customer id reference", "incoterm", "currency", "price",
+                    "cod value", "cod currency",
+                    "consignee name", "consignee city", "consignee country",
+                    "consignee phone", "consignee code value",
+                    "shipper name", "shipper city", "shipper country",
+                    "shipper phone", "shipper code value"
+                ]);
+                const num = v => { const m = String(v || "").match(/-?\d+/); return m ? m[0] : ""; };
+
                 return {
-                    "track_number": extract(/Survey for shipment:\s*([^,]+)/i, surveyPart) || shipment_num,
-                    "customer_name": extract(/customer name:\s*([^,]+)/i, shipmentPart),
-                    "CSAT_Overall": extract(/(?:Overall Experience:|How was your experience\?)\s*(\d+)/i, surveyPart),
-                    "NPS": extract(/Recommendation Rate:\s*(\d+)/i, surveyPart),
-                    "SpeedOfDelivery": extract(/(?:Delivery Speed:|How is delivery speed\?)\s*(\d+)/i, surveyPart),
-                    "ShipmentCondition": extract(/(?:Package Condition:|How was package condition\?)\s*(\d+)/i, surveyPart),
-                    "CourierBehavior": extract(/(?:Courier's Behavior:|Was the courier's behavior good\?)\s*(\d+)/i, surveyPart),
-                    "Payment Issue": extract(/(?:Payment Issue:|Any payment issue\?)\s*([^,]+)/i, surveyPart),
-                    "Verbatim_Improvment": extract(/(?:Suggestions:|How can we improve\?)\s*([^,]+)/i, surveyPart)
+                    // The shipment reference exactly as it appeared after
+                    // "Survey for shipment:" (a courier AWB, an S-number, or blank).
+                    // It never reaches into the enriched tail, so "Shipment Details"
+                    // can no longer leak in as "Details".
+                    "track_number": extract(/Survey for shipment:\s*([^,]+)/i, surveyPart),
+                    "CSAT_Overall": num(sv["overall experience"]) || extract(/(?:Overall Experience:|How was your experience\?)\s*(\d+)/i, surveyPart),
+                    "NPS": num(sv["recommendation rate"]) || extract(/Recommendation Rate:\s*(\d+)/i, surveyPart),
+                    "SpeedOfDelivery": num(sv["delivery speed"]) || extract(/(?:Delivery Speed:|How is delivery speed\?)\s*(\d+)/i, surveyPart),
+                    "ShipmentCondition": num(sv["package condition"]) || extract(/(?:Package Condition:|How was package condition\?)\s*(\d+)/i, surveyPart),
+                    "CourierBehavior": num(sv["courier's behavior"]) || extract(/(?:Courier's Behavior:|Was the courier's behavior good\?)\s*(\d+)/i, surveyPart),
+                    "Issues": sv["issues"] || "",
+                    "Payment Issue": sv["payment issue"] || extract(/(?:Payment Issue:|Any payment issue\?)\s*([^,]+)/i, surveyPart),
+                    "Verbatim_Improvment": sv["suggestions"] || extract(/(?:Suggestions:|How can we improve\?)\s*([^,]+)/i, surveyPart),
+
+                    // Enriched shipment details.
+                    "customer_name": sd["customer name"] || "",
+                    "Status": sd["status"] || "",
+                    "Service Code": sd["service code"] || "",
+                    "Order Reference": sd["order reference"] || "",
+                    "Customer ID Ref": sd["customer id reference"] || "",
+                    "Incoterm": sd["incoterm"] || "",
+                    "Currency": sd["currency"] || "",
+                    "Price": sd["price"] || "",
+                    "Consignee Name": sd["consignee name"] || "",
+                    "Consignee City": sd["consignee city"] || "",
+                    "Consignee Country": sd["consignee country"] || "",
+                    "Consignee Phone": sd["consignee phone"] || "",
+                    "Shipper Name": sd["shipper name"] || "",
+                    "Shipper City": sd["shipper city"] || "",
+                    "Shipper Country": sd["shipper country"] || "",
+                    "Shipper Phone": sd["shipper phone"] || ""
                 };
             }
 
