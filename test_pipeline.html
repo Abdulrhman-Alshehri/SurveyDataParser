@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pipeline Test Suite — SurveyDataParser</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+            --pass: #22c55e;
+            --fail: #ef4444;
+            --info: #3b82f6;
+            --warn: #f59e0b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #22c55e, #3b82f6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--text-dim);
+            margin-bottom: 2rem;
+            font-size: 0.9rem;
+        }
+
+        .summary-bar {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background: var(--surface);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        .summary-item {
+            text-align: center;
+        }
+        .summary-item .number {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+        .summary-item .label {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .summary-item.pass .number { color: var(--pass); }
+        .summary-item.fail .number { color: var(--fail); }
+        .summary-item.total .number { color: var(--info); }
+
+        .test-group {
+            background: var(--surface);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            margin-bottom: 1rem;
+            overflow: hidden;
+        }
+        .test-group-header {
+            padding: 1rem 1.5rem;
+            font-weight: 600;
+            font-size: 1rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .test-group-header:hover {
+            background: rgba(255,255,255,0.03);
+        }
+        .test-group-header .icon {
+            font-size: 1.2rem;
+        }
+        .test-group-body {
+            padding: 0;
+        }
+        .test-result {
+            padding: 0.6rem 1.5rem 0.6rem 3rem;
+            font-size: 0.85rem;
+            border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .test-result:last-child { border-bottom: none; }
+        .test-result .icon { font-size: 0.9rem; flex-shrink: 0; }
+        .test-result.pass { color: var(--pass); }
+        .test-result.fail { color: var(--fail); background: rgba(239, 68, 68, 0.08); }
+
+        .log-line {
+            padding: 0.4rem 1.5rem 0.4rem 3rem;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            font-family: 'Consolas', 'Courier New', monospace;
+            border-bottom: 1px solid rgba(51, 65, 85, 0.3);
+        }
+        .log-line:last-child { border-bottom: none; }
+        .log-line.api-call { color: var(--warn); }
+
+        #runBtn {
+            display: block;
+            margin: 0 auto 2rem;
+            padding: 0.75rem 2.5rem;
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        #runBtn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3);
+        }
+        #runBtn:active { transform: translateY(0); }
+        #runBtn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Pipeline Test Suite</h1>
+    <p class="subtitle">SurveyDataParser — Core Logic Verification (13 tests, no server needed)</p>
+
+    <button id="runBtn" onclick="runAllTests()">▶ Run All Tests</button>
+
+    <div id="summaryBar" class="summary-bar" style="display:none;">
+        <div class="summary-item pass"><div class="number" id="passCount">0</div><div class="label">Passed</div></div>
+        <div class="summary-item fail"><div class="number" id="failCount">0</div><div class="label">Failed</div></div>
+        <div class="summary-item total"><div class="number" id="totalCount">0</div><div class="label">Total</div></div>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+        // ─────────────────────────────────────────────────────────────────
+        // Core functions — extracted verbatim from index.html
+        // ─────────────────────────────────────────────────────────────────
+
+        const SHIPMENT_NUM_PATTERN = /\b[A-Z]{1,3}\d{7,}\b/;
+        const SHIPMENT_PLACEHOLDERS = new Set(["", "details", "{{track_number}}", "n/a", "na", "null", "undefined", "-"]);
+
+        function extractShipmentNumber(text) {
+            if (!text) return "";
+            const raw = String(text).trim();
+            if (SHIPMENT_PLACEHOLDERS.has(raw.toLowerCase())) return "";
+            const m = raw.match(SHIPMENT_NUM_PATTERN);
+            return m ? m[0].toUpperCase() : "";
+        }
+
+        function resolveShipmentNumber(r) {
+            return extractShipmentNumber(r["Shipment Number"])
+                || extractShipmentNumber(r["track_number"])
+                || extractShipmentNumber(r["Job Done Name"]);
+        }
+
+        function normalizeMobile(v) {
+            if (v === undefined || v === null) return "";
+            let s = String(v).replace(/\D/g, "");
+            if (!s) return "";
+            s = s.replace(/^0+/, "");
+            if (s.length === 9 && s.startsWith("5")) s = "966" + s;
+            return s;
+        }
+
+        function parseRowString(text, mode) {
+            const safeText = text || "";
+            const extract = (pattern, source) => {
+                const match = source.match(pattern);
+                return match ? match[1].trim() : "";
+            };
+            const shipment_num = extract(/(?:shipment:|shipment)\s*([A-Z0-9]+)/i, safeText) || extract(/S\d{9,}/, safeText);
+            const customer_name = extract(/customer name:\s*([^,]+)/i, safeText);
+            const service_code = extract(/service code:\s*([^,]+)/i, safeText);
+            const order_ref = extract(/order reference:\s*([^,]+)/i, safeText);
+
+            if (mode === 'survey') {
+                const parts = safeText.split("|||");
+                const surveyPart = parts[0] || "";
+                const shipmentPart = parts[1] || "";
+                return {
+                    "track_number": extract(/Survey for shipment:\s*([^,]+)/i, surveyPart) || shipment_num,
+                    "customer_name": extract(/customer name:\s*([^,]+)/i, shipmentPart),
+                    "CSAT_Overall": extract(/(?:Overall Experience:|How was your experience\?)\s*(\d+)/i, surveyPart),
+                    "NPS": extract(/Recommendation Rate:\s*(\d+)/i, surveyPart),
+                    "SpeedOfDelivery": extract(/(?:Delivery Speed:|How is delivery speed\?)\s*(\d+)/i, surveyPart),
+                    "ShipmentCondition": extract(/(?:Package Condition:|How was package condition\?)\s*(\d+)/i, surveyPart),
+                    "CourierBehavior": extract(/(?:Courier's Behavior:|Was the courier's behavior good\?)\s*(\d+)/i, surveyPart),
+                    "Payment Issue": extract(/(?:Payment Issue:|Any payment issue\?)\s*([^,]+)/i, surveyPart),
+                    "Verbatim_Improvment": extract(/(?:Suggestions:|How can we improve\?)\s*([^,]+)/i, surveyPart)
+                };
+            }
+            if (mode === 'undelivered') {
+                return {
+                    "Shipment Number": shipment_num, "track_number": shipment_num,
+                    "NDR Reason": extract(/ndr:\s*([^,]+)/i, safeText),
+                    "Status": extract(/status:\s*([^,]+)/i, safeText),
+                    "Customer Name": customer_name, "customer_name": customer_name,
+                    "Service Code": service_code, "Order Reference": order_ref,
+                    "Customer ID Ref": extract(/customer id reference:\s*([^,]+)/i, safeText),
+                    "Incoterm": extract(/incoterm:\s*([^,]+)/i, safeText),
+                };
+            }
+            if (mode === 'dispute') {
+                return {
+                    "Shipment Number": shipment_num, "track_number": shipment_num,
+                    "Dispute Reason": extract(/Dispute - ([^:]+):/i, safeText) || "Dispute",
+                    "NDR": extract(/ndr:\s*([^,]+)/i, safeText),
+                    "Status": extract(/status:\s*([^,]+)/i, safeText),
+                    "Customer Name": customer_name, "customer_name": customer_name,
+                    "Service Code": service_code, "Order Reference": order_ref
+                };
+            }
+            return null;
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Mock API
+        // ─────────────────────────────────────────────────────────────────
+
+        let apiCallCount = 0;
+        const MOCK_API_RESPONSES = {
+            "966506112617": { ok: true, shipments: [
+                { track_number: "S0003086086", status: "DELIVERED" },
+                { track_number: "S0006933219", status: "DELIVERED" }
+            ]},
+            "966555000111": { ok: true, shipments: [] }
+        };
+
+        async function fetchShipmentsByMobile(mobile) {
+            apiCallCount++;
+            currentLogs.push({ type: 'api', text: `API CALL #${apiCallCount}: fetchShipmentsByMobile("${mobile}")` });
+            await new Promise(r => setTimeout(r, 5));
+            return MOCK_API_RESPONSES[mobile] || { ok: false, shipments: [] };
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // applyShipmentLinkage — same as index.html but uses mock fetch
+        // ─────────────────────────────────────────────────────────────────
+
+        async function applyShipmentLinkage(records, onProgress) {
+            const index = {};
+            records.forEach((r, i) => {
+                const num = resolveShipmentNumber(r);
+                const mob = normalizeMobile(r["User Channel ID"]);
+                if (num && mob) {
+                    (index[mob] = index[mob] || []).push({
+                        idx: i, shipment: num,
+                        jobDoneName: r["Job Done Name"] || "",
+                        date: [r["Date"], r["Time"]].filter(Boolean).join(" ")
+                    });
+                }
+            });
+
+            const needsLiveLookup = [];
+            records.forEach((r, i) => {
+                const own = resolveShipmentNumber(r);
+                if (own) { r["Shipment Number"] = own; r["Match Status"] = "ok"; return; }
+                if (r["Shipment Number"] && !extractShipmentNumber(r["Shipment Number"])) {
+                    r["Shipment Number"] = "";
+                }
+                const mob = normalizeMobile(r["User Channel ID"]);
+                const related = mob ? (index[mob] || []).filter(s => s.idx !== i) : [];
+                if (related.length) {
+                    r["Related Shipments"] = related.map(s => s.date ? `${s.shipment} [${s.date}]` : s.shipment).join("; ");
+                    r["Match Status"] = "found";
+                } else if (mob) {
+                    needsLiveLookup.push({ row: r, mob });
+                } else {
+                    r["Related Shipments"] = "";
+                    r["Match Status"] = "no_shipment_found";
+                }
+            });
+
+            // Deduplicate: one API call per unique mobile
+            const uniqueMobiles = [...new Set(needsLiveLookup.map(x => x.mob))];
+            const lookupResults = {};
+            for (const mob of uniqueMobiles) {
+                lookupResults[mob] = await fetchShipmentsByMobile(mob);
+            }
+            for (const { row, mob } of needsLiveLookup) {
+                const { ok, shipments } = lookupResults[mob];
+                if (!ok) { row["Related Shipments"] = ""; row["Match Status"] = "lookup_error"; continue; }
+                if (shipments.length) {
+                    row["Related Shipments"] = shipments.filter(s => s.track_number)
+                        .map(s => s.status ? `${s.track_number} [${s.status}]` : s.track_number).join("; ");
+                    row["Match Status"] = "found";
+                } else {
+                    row["Related Shipments"] = "";
+                    row["Match Status"] = "no_shipment_found";
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Test Framework
+        // ─────────────────────────────────────────────────────────────────
+
+        let totalPassed = 0, totalFailed = 0;
+        let currentResults = [];
+        let currentLogs = [];
+
+        function assert(condition, label) {
+            if (condition) {
+                currentResults.push({ pass: true, label });
+                totalPassed++;
+            } else {
+                currentResults.push({ pass: false, label });
+                totalFailed++;
+            }
+        }
+
+        function log(text) {
+            currentLogs.push({ type: 'log', text });
+        }
+
+        function renderGroup(title, results, logs) {
+            const allPass = results.every(r => r.pass);
+            const container = document.getElementById('results');
+            const group = document.createElement('div');
+            group.className = 'test-group';
+            
+            let html = `<div class="test-group-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? '' : 'none'">
+                <span class="icon">${allPass ? '✅' : '❌'}</span>
+                <span>${title}</span>
+                <span style="margin-left:auto;font-size:0.8rem;color:var(--text-dim)">${results.filter(r=>r.pass).length}/${results.length}</span>
+            </div>`;
+            html += `<div class="test-group-body" style="${allPass ? 'display:none' : ''}">`;
+            
+            for (const l of logs) {
+                html += `<div class="log-line ${l.type === 'api' ? 'api-call' : ''}">${l.type === 'api' ? '⚡ ' : '   '}${escapeHtml(l.text)}</div>`;
+            }
+            for (const r of results) {
+                html += `<div class="test-result ${r.pass ? 'pass' : 'fail'}"><span class="icon">${r.pass ? '✅' : '❌'}</span>${escapeHtml(r.label)}</div>`;
+            }
+            html += `</div>`;
+            group.innerHTML = html;
+            container.appendChild(group);
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Test Cases
+        // ─────────────────────────────────────────────────────────────────
+
+        async function runAllTests() {
+            document.getElementById('runBtn').disabled = true;
+            document.getElementById('runBtn').textContent = '⏳ Running...';
+            document.getElementById('results').innerHTML = '';
+            totalPassed = 0;
+            totalFailed = 0;
+
+            // Allow UI to update
+            await new Promise(r => setTimeout(r, 50));
+
+            // ── Test 1: parseRowString with empty shipment ──
+            currentResults = []; currentLogs = [];
+            const emptyShipmentText = "Survey for shipment: , Overall Experience: 5, Recommendation Rate: 10, Delivery Speed: 4, Package Condition: 5, Courier's Behavior: 5, Payment Issue: No, Suggestions: Great service|||customer name: Ahmed Al-Qahtani";
+            const parsed1 = parseRowString(emptyShipmentText, "survey");
+            log(`track_number = ${JSON.stringify(parsed1.track_number)}`);
+            assert(parsed1 !== null, "parseRowString returns an object (not null)");
+            assert(parsed1.track_number === "" || parsed1.track_number.trim() === "", "track_number is empty (no valid shipment)");
+            assert(parsed1.CSAT_Overall === "5", "CSAT_Overall = 5");
+            assert(parsed1.NPS === "10", "NPS = 10");
+            assert(parsed1.customer_name === "Ahmed Al-Qahtani", "customer_name extracted from ||| section");
+            renderGroup("Test 1: parseRowString — empty shipment field", currentResults, currentLogs);
+
+            // ── Test 2: extractShipmentNumber rejects placeholders ──
+            currentResults = []; currentLogs = [];
+            assert(extractShipmentNumber("") === "", "Empty string → empty");
+            assert(extractShipmentNumber(null) === "", "null → empty");
+            assert(extractShipmentNumber(undefined) === "", "undefined → empty");
+            assert(extractShipmentNumber("Details") === "", "'Details' → empty");
+            assert(extractShipmentNumber("{{track_number}}") === "", "'{{track_number}}' → empty");
+            assert(extractShipmentNumber("N/A") === "", "'N/A' → empty");
+            assert(extractShipmentNumber(" ") === "", "Whitespace → empty");
+            assert(extractShipmentNumber("S0006933219") === "S0006933219", "Valid shipment → preserved");
+            assert(extractShipmentNumber("R0000418068") === "R0000418068", "Valid R-prefix → preserved");
+            assert(extractShipmentNumber("some text S0006933219 more") === "S0006933219", "Extracted from middle of string");
+            renderGroup("Test 2: extractShipmentNumber — rejects placeholders", currentResults, currentLogs);
+
+            // ── Test 3: resolveShipmentNumber — field fallthrough ──
+            currentResults = []; currentLogs = [];
+            const r1 = { "Shipment Number": "", "track_number": "", "Job Done Name": "Survey for shipment: ," };
+            assert(resolveShipmentNumber(r1) === "", "All empty/invalid → empty");
+            const r2 = { "Shipment Number": "Details", "track_number": "", "Job Done Name": "some text S0006933219" };
+            assert(resolveShipmentNumber(r2) === "S0006933219", "Falls through 'Details' to Job Done Name");
+            const r3 = { "Shipment Number": "S0003086086", "track_number": "", "Job Done Name": "" };
+            assert(resolveShipmentNumber(r3) === "S0003086086", "Uses Shipment Number when valid");
+            renderGroup("Test 3: resolveShipmentNumber — field fallthrough", currentResults, currentLogs);
+
+            // ── Test 4: normalizeMobile ──
+            currentResults = []; currentLogs = [];
+            assert(normalizeMobile("966506112617") === "966506112617", "Already international → kept");
+            assert(normalizeMobile("0506112617") === "966506112617", "Leading 0 → normalized to 966");
+            assert(normalizeMobile("506112617") === "966506112617", "9-digit starting with 5 → 966 prefix");
+            assert(normalizeMobile("+966 506 112 617") === "966506112617", "Formatted → cleaned");
+            assert(normalizeMobile("") === "", "Empty → empty");
+            assert(normalizeMobile(null) === "", "null → empty");
+            renderGroup("Test 4: normalizeMobile — Saudi format normalization", currentResults, currentLogs);
+
+            // ── Test 5: Full pipeline — empty shipment + live lookup ──
+            currentResults = []; currentLogs = [];
+            apiCallCount = 0;
+            const records5 = [{
+                ...parseRowString(emptyShipmentText, "survey"),
+                "Date": "2026-02-04", "Time": "10:30:00", "Bot User": "SurveyBot",
+                "User Channel ID": "966506112617",
+                "Job Done Name": emptyShipmentText,
+                "SubmittedAt": "2026-02-04 10:30:00"
+            }];
+            log(`Before: track_number = ${JSON.stringify(records5[0].track_number)}`);
+            log(`Before: User Channel ID = ${records5[0]["User Channel ID"]}`);
+            await applyShipmentLinkage(records5);
+            log(`After: Match Status = ${records5[0]["Match Status"]}`);
+            log(`After: Related Shipments = ${records5[0]["Related Shipments"]}`);
+            assert(records5[0]["Match Status"] === "found", "Match Status = 'found' (live lookup worked)");
+            assert((records5[0]["Related Shipments"] || "").includes("S0003086086"), "Related Shipments includes S0003086086");
+            assert((records5[0]["Related Shipments"] || "").includes("S0006933219"), "Related Shipments includes S0006933219");
+            assert((records5[0]["Related Shipments"] || "").includes("DELIVERED"), "Related Shipments shows DELIVERED status");
+            renderGroup("Test 5: Full pipeline — empty shipment triggers live lookup", currentResults, currentLogs);
+
+            // ── Test 6: Dedupe ──
+            currentResults = []; currentLogs = [];
+            apiCallCount = 0;
+            const dupeRecords = [
+                { ...parseRowString("Survey for shipment: , Overall Experience: 3", "survey"), "User Channel ID": "966506112617", "Job Done Name": "Survey for shipment: ," },
+                { ...parseRowString("Survey for shipment: , Overall Experience: 4", "survey"), "User Channel ID": "966506112617", "Job Done Name": "Survey for shipment: ," },
+                { ...parseRowString("Survey for shipment: , Overall Experience: 2", "survey"), "User Channel ID": "0506112617", "Job Done Name": "Survey for shipment: ," },
+            ];
+            await applyShipmentLinkage(dupeRecords);
+            log(`API calls made: ${apiCallCount}`);
+            assert(apiCallCount === 1, `Only 1 API call for 3 rows with same mobile (got ${apiCallCount})`);
+            assert(dupeRecords[0]["Match Status"] === "found", "Row 1 → found");
+            assert(dupeRecords[1]["Match Status"] === "found", "Row 2 → found");
+            assert(dupeRecords[2]["Match Status"] === "found", "Row 3 → found");
+            renderGroup("Test 6: Deduplicate — 3 rows same mobile → 1 API call", currentResults, currentLogs);
+
+            // ── Test 7: Valid shipment → ok ──
+            currentResults = []; currentLogs = [];
+            apiCallCount = 0;
+            const okRecords = [{
+                ...parseRowString("Survey for shipment: S0006940767, Overall Experience: 5", "survey"),
+                "User Channel ID": "966501234567",
+                "Job Done Name": "Survey for shipment: S0006940767"
+            }];
+            await applyShipmentLinkage(okRecords);
+            log(`API calls made: ${apiCallCount}`);
+            assert(apiCallCount === 0, "No API call for row with valid shipment");
+            assert(okRecords[0]["Match Status"] === "ok", "Match Status = 'ok'");
+            assert(okRecords[0]["Shipment Number"] === "S0006940767", "Shipment Number written back correctly");
+            renderGroup("Test 7: Valid shipment number → 'ok' (no API call)", currentResults, currentLogs);
+
+            // ── Test 8: No mobile → no_shipment_found ──
+            currentResults = []; currentLogs = [];
+            apiCallCount = 0;
+            const noMob = [{
+                ...parseRowString("Survey for shipment: , Overall Experience: 1", "survey"),
+                "User Channel ID": "", "Job Done Name": "Survey for shipment: ,"
+            }];
+            await applyShipmentLinkage(noMob);
+            assert(apiCallCount === 0, "No API call when mobile is empty");
+            assert(noMob[0]["Match Status"] === "no_shipment_found", "Match Status = 'no_shipment_found'");
+            renderGroup("Test 8: No mobile number → no_shipment_found", currentResults, currentLogs);
+
+            // ── Test 9: API error → lookup_error ──
+            currentResults = []; currentLogs = [];
+            apiCallCount = 0;
+            const errRec = [{
+                ...parseRowString("Survey for shipment: , Overall Experience: 1", "survey"),
+                "User Channel ID": "966599999999", "Job Done Name": "Survey for shipment: ,"
+            }];
+            await applyShipmentLinkage(errRec);
+            assert(errRec[0]["Match Status"] === "lookup_error", "Match Status = 'lookup_error'");
+            renderGroup("Test 9: API returns error → lookup_error", currentResults, currentLogs);
+
+            // ── Test 10: API returns empty → no_shipment_found ──
+            currentResults = []; currentLogs = [];
+            apiCallCount = 0;
+            const emptyApi = [{
+                ...parseRowString("Survey for shipment: , Overall Experience: 1", "survey"),
+                "User Channel ID": "966555000111", "Job Done Name": "Survey for shipment: ,"
+            }];
+            await applyShipmentLinkage(emptyApi);
+            assert(emptyApi[0]["Match Status"] === "no_shipment_found", "Match Status = 'no_shipment_found' (0 shipments)");
+            renderGroup("Test 10: API returns empty array → no_shipment_found", currentResults, currentLogs);
+
+            // ── Test 11: Sibling row → found without API ──
+            currentResults = []; currentLogs = [];
+            apiCallCount = 0;
+            const siblings = [
+                {
+                    ...parseRowString("Survey for shipment: S0006940767, Overall Experience: 5", "survey"),
+                    "User Channel ID": "966501111222", "Job Done Name": "Survey for shipment: S0006940767",
+                    "Date": "2026-02-03", "Time": "09:00:00"
+                },
+                {
+                    ...parseRowString("Survey for shipment: , Overall Experience: 2", "survey"),
+                    "User Channel ID": "966501111222", "Job Done Name": "Survey for shipment: ,"
+                }
+            ];
+            await applyShipmentLinkage(siblings);
+            log(`API calls made: ${apiCallCount}`);
+            assert(apiCallCount === 0, "No API call — resolved from sibling row");
+            assert(siblings[0]["Match Status"] === "ok", "Row 1 (has shipment) → ok");
+            assert(siblings[1]["Match Status"] === "found", "Row 2 (missing) → found from sibling");
+            assert((siblings[1]["Related Shipments"] || "").includes("S0006940767"), "Related Shipments references sibling's shipment");
+            renderGroup("Test 11: Sibling row in file → found (no API call)", currentResults, currentLogs);
+
+            // ── Test 12: Undelivered mode ──
+            currentResults = []; currentLogs = [];
+            const undText = "Undelivered - Invalid Reason: for shipment: S0006314778, ndr: NO RESPONSE - لا يوجد رد, status: Delivery Attempted, customer name: محمد العتيبي";
+            const parsedUnd = parseRowString(undText, "undelivered");
+            assert(parsedUnd["Shipment Number"] === "S0006314778", "Shipment Number parsed correctly");
+            assert((parsedUnd["NDR Reason"] || "").includes("NO RESPONSE"), "NDR Reason extracted");
+            assert(parsedUnd["Status"] === "Delivery Attempted", "Status extracted");
+            assert(parsedUnd["Customer Name"] === "محمد العتيبي", "Arabic customer name preserved");
+            renderGroup("Test 12: Undelivered mode parsing", currentResults, currentLogs);
+
+            // ── Test 13: Dispute mode ──
+            currentResults = []; currentLogs = [];
+            const dispText = "Dispute - Not delivered: for shipment: S0006940767, ndr: CUSTOMER REFUSED, status: Returned";
+            const parsedDisp = parseRowString(dispText, "dispute");
+            assert(parsedDisp["Shipment Number"] === "S0006940767", "Shipment Number parsed correctly");
+            assert(parsedDisp["Dispute Reason"] === "Not delivered", "Dispute Reason extracted");
+            assert(parsedDisp["NDR"] === "CUSTOMER REFUSED", "NDR extracted");
+            assert(parsedDisp["Status"] === "Returned", "Status extracted");
+            renderGroup("Test 13: Dispute mode parsing", currentResults, currentLogs);
+
+            // ── Summary ──
+            document.getElementById('summaryBar').style.display = 'flex';
+            document.getElementById('passCount').textContent = totalPassed;
+            document.getElementById('failCount').textContent = totalFailed;
+            document.getElementById('totalCount').textContent = totalPassed + totalFailed;
+            
+            document.getElementById('runBtn').disabled = false;
+            document.getElementById('runBtn').textContent = totalFailed === 0 ? '✅ All Passed — Run Again' : '❌ Some Failed — Run Again';
+        }
+    </script>
+</body>
+</html>
