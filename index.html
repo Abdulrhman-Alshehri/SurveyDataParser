@@ -612,18 +612,43 @@
         ];
 
         // --- Missing-Shipment Linkage (Steps 1-2) ---
-        // A valid shipment number is a letter prefix followed by a long run of digits
-        // (e.g. S0006314778, R0000418068). Unresolved bot templates such as
-        // "{{track_number}}" or empty values therefore do NOT match and are flagged.
+        // A valid shipment number is a short letter prefix followed by a long run of
+        // digits (e.g. S0006940767, R0000418068). Anything that does not match this
+        // pattern — an empty cell OR a stuck template/placeholder such as
+        // "{{track_number}}" or "Details" — is treated as MISSING and flagged so it
+        // goes through the Step 2 mobile-number lookup.
         const SHIPMENT_NUM_PATTERN = /\b[A-Z]{1,3}\d{7,}\b/;
+
+        // Known stuck-template / placeholder values that repeatedly appear in the bot
+        // export in place of a real shipment number. They are explicitly rejected so
+        // they can never be mistaken for a valid value. (The pattern check below is the
+        // real guard; this list documents the intent and short-circuits common cases.)
+        const SHIPMENT_PLACEHOLDERS = new Set([
+            "", "details", "{{track_number}}", "n/a", "na", "null", "undefined", "-"
+        ]);
 
         // Columns appended by the linkage analysis, shown alongside the existing columns.
         const LINKAGE_COLS = ["User Channel ID", "Shipment Number", "Job Done Name", "Related Shipments", "Match Status"];
 
+        // Returns a real shipment number found in `text`, or "" when none is present.
+        // A value is only valid if it matches SHIPMENT_NUM_PATTERN; empty strings and
+        // known placeholders ("Details", "{{track_number}}", ...) always return "".
         function extractShipmentNumber(text) {
             if (!text) return "";
-            const m = String(text).match(SHIPMENT_NUM_PATTERN);
+            const raw = String(text).trim();
+            if (SHIPMENT_PLACEHOLDERS.has(raw.toLowerCase())) return "";
+            const m = raw.match(SHIPMENT_NUM_PATTERN);
             return m ? m[0].toUpperCase() : "";
+        }
+
+        // Resolves a record's real shipment number from any of its candidate fields,
+        // validating each one against the pattern above. Because every candidate goes
+        // through extractShipmentNumber, a placeholder like "Details" sitting in the
+        // "Shipment Number" column no longer passes through as if it were valid.
+        function resolveShipmentNumber(r) {
+            return extractShipmentNumber(r["Shipment Number"])
+                || extractShipmentNumber(r["track_number"])
+                || extractShipmentNumber(r["Job Done Name"]);
         }
 
         // Digits-only mobile key with light Saudi normalisation so equivalent formats
@@ -656,7 +681,7 @@
             // Build a mobile -> [shipments that have a real number] index.
             const index = {};
             records.forEach((r, i) => {
-                const num = r["Shipment Number"] || r["track_number"] || extractShipmentNumber(r["Job Done Name"]);
+                const num = resolveShipmentNumber(r);
                 const mob = normalizeMobile(r["User Channel ID"]);
                 if (num && mob) {
                     (index[mob] = index[mob] || []).push({
@@ -669,13 +694,20 @@
             });
 
             records.forEach((r, i) => {
-                const own = r["Shipment Number"] || r["track_number"] || extractShipmentNumber(r["Job Done Name"]);
+                const own = resolveShipmentNumber(r);
                 if (own) {
-                    if (!r["Shipment Number"]) r["Shipment Number"] = own;
+                    // Always write the validated number back, replacing any stuck
+                    // placeholder (e.g. "Details") that may be sitting in the column.
+                    r["Shipment Number"] = own;
                     r["Match Status"] = "ok";
                     return;
                 }
-                // Flagged: missing_shipment_number. Look up siblings sharing this mobile.
+                // Flagged: missing/invalid shipment number. Clear any placeholder text so
+                // the output does not present it as a real value, then look up siblings
+                // sharing this mobile (Step 2).
+                if (r["Shipment Number"] && !extractShipmentNumber(r["Shipment Number"])) {
+                    r["Shipment Number"] = "";
+                }
                 const mob = normalizeMobile(r["User Channel ID"]);
                 const related = mob ? (index[mob] || []).filter(s => s.idx !== i) : [];
                 if (related.length) {
@@ -785,7 +817,7 @@
                 for (let i = 0; i < parsedData.length; i += batchSize) {
                     const batch = parsedData.slice(i, i + batchSize);
                     await Promise.all(batch.map(async (item) => {
-                        const ref = item["track_number"] || item["Shipment Number"];
+                        const ref = resolveShipmentNumber(item);
                         if (ref) {
                             try {
                                 const apiResp = await fetchShipmentData(ref);
