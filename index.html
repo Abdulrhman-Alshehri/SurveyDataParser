@@ -536,6 +536,8 @@
         <div id="resultsSection" class="hidden">
             <!-- Stats Removed -->
 
+            <p id="resultsWarning" style="color: #b45309; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; display: none;"></p>
+
             <div class="table-container">
                 <div class="table-header-controls">
                     <span class="preview-title">Data Preview</span>
@@ -687,13 +689,20 @@
                 if (!response.ok) {
                     const errorText = await response.text();
                     console.error(`Mobile lookup API error for ${mobile}: ${response.status} ${response.statusText}`, errorText);
-                    return { ok: false, shipments: [] };
+                    return { ok: false, shipments: [], missingKey: errorText.includes("Missing API Key") };
                 }
                 const data = await response.json();
-                return { ok: true, shipments: Array.isArray(data) ? data : [] };
+                // The API normally returns a bare array; unwrap common envelope shapes
+                // ({data:[...]}, {shipments:[...]}, ...) so a wrapped response is never
+                // mistaken for "zero shipments".
+                let shipments = data;
+                if (!Array.isArray(shipments) && shipments && typeof shipments === 'object') {
+                    shipments = [data.data, data.shipments, data.results, data.items].find(Array.isArray) || [];
+                }
+                return { ok: true, shipments: Array.isArray(shipments) ? shipments : [], missingKey: false };
             } catch (err) {
                 console.error(`Mobile lookup API exception for ${mobile}:`, err);
-                return { ok: false, shipments: [] };
+                return { ok: false, shipments: [], missingKey: false };
             }
         }
 
@@ -724,7 +733,9 @@
                 }
             });
 
-            const needsLiveLookup = [];
+            // Rows still unresolved after the in-file pass, grouped by mobile so each
+            // unique number is queried against the live API exactly once.
+            const liveLookupsByMobile = new Map();
             records.forEach((r, i) => {
                 const own = resolveShipmentNumber(r);
                 if (own) {
@@ -748,36 +759,41 @@
                         .join("; ");
                     r["Match Status"] = "found";
                 } else if (mob) {
-                    needsLiveLookup.push({ row: r, mob });
+                    if (!liveLookupsByMobile.has(mob)) liveLookupsByMobile.set(mob, []);
+                    liveLookupsByMobile.get(mob).push(r);
                 } else {
                     r["Related Shipments"] = "";
                     r["Match Status"] = "no_shipment_found";
                 }
             });
 
+            let missingKey = false;
+            const uniqueMobiles = [...liveLookupsByMobile.keys()];
             const batchSize = 10;
-            for (let i = 0; i < needsLiveLookup.length; i += batchSize) {
-                const batch = needsLiveLookup.slice(i, i + batchSize);
-                await Promise.all(batch.map(async ({ row, mob }) => {
-                    const { ok, shipments } = await fetchShipmentsByMobile(mob);
-                    if (!ok) {
-                        row["Related Shipments"] = "";
-                        row["Match Status"] = "lookup_error";
-                        return;
-                    }
-                    if (shipments.length) {
-                        row["Related Shipments"] = shipments
-                            .filter(s => s.track_number)
-                            .map(s => s.status ? `${s.track_number} [${s.status}]` : s.track_number)
-                            .join("; ");
-                        row["Match Status"] = "found";
-                    } else {
-                        row["Related Shipments"] = "";
-                        row["Match Status"] = "no_shipment_found";
-                    }
+            for (let i = 0; i < uniqueMobiles.length; i += batchSize) {
+                const batch = uniqueMobiles.slice(i, i + batchSize);
+                await Promise.all(batch.map(async (mob) => {
+                    const result = await fetchShipmentsByMobile(mob);
+                    if (result.missingKey) missingKey = true;
+                    liveLookupsByMobile.get(mob).forEach(row => {
+                        if (!result.ok) {
+                            row["Related Shipments"] = "";
+                            row["Match Status"] = "lookup_error";
+                        } else if (result.shipments.length) {
+                            row["Related Shipments"] = result.shipments
+                                .filter(s => s.track_number)
+                                .map(s => s.status ? `${s.track_number} [${s.status}]` : s.track_number)
+                                .join("; ");
+                            row["Match Status"] = "found";
+                        } else {
+                            row["Related Shipments"] = "";
+                            row["Match Status"] = "no_shipment_found";
+                        }
+                    });
                 }));
-                if (onProgress) onProgress(Math.min(i + batchSize, needsLiveLookup.length), needsLiveLookup.length);
+                if (onProgress) onProgress(Math.min(i + batchSize, uniqueMobiles.length), uniqueMobiles.length);
             }
+            return { missingKey, liveLookups: uniqueMobiles.length };
         }
 
         // --- Mode Selection Logic ---
@@ -1008,6 +1024,7 @@
                 c.classList.remove('selected');
                 c.classList.remove('not-selected');
             });
+            showResultsWarning("");
 
             errorMsg.style.display = 'none';
             previewTable.querySelector('tbody').innerHTML = "";
@@ -1015,6 +1032,14 @@
         function showError(msg) {
             console.error("Error Shown:", msg);
             if (msg) { errorMsg.innerText = msg; errorMsg.style.display = 'block'; } else { errorMsg.style.display = 'none'; }
+        }
+        // Non-fatal warning shown at the top of the results view (the upload-section
+        // error banner is hidden once results render, so it can't be used for this).
+        function showResultsWarning(msg) {
+            const el = document.getElementById('resultsWarning');
+            if (!el) return;
+            if (msg) { console.warn("Results Warning:", msg); el.innerText = msg; el.style.display = 'block'; }
+            else { el.style.display = 'none'; }
         }
         function showLoading(show, text = "Processing...") {
             loadingText.innerText = text;
@@ -1159,9 +1184,14 @@
             // from within the file, then fall back to a live tracking lookup by mobile
             // for anything still unresolved.
             showLoading(true, "Linking related shipments...");
-            await applyShipmentLinkage(parsedData, (done, total) => {
+            const linkage = await applyShipmentLinkage(parsedData, (done, total) => {
                 showLoading(true, `Looking up shipments by mobile number (${done}/${total})...`);
             });
+            // A missing server key must never fail silently: every flagged row would
+            // quietly land on "lookup_error" and look like bad data. Say so, visibly.
+            showResultsWarning(linkage.missingKey
+                ? "Live mobile-number lookup is DISABLED: 'STARLINKS_API_KEY' is not set on the server. Rows marked 'lookup_error' were NOT checked against the tracking API. Set the key in Netlify Env Vars and redeploy."
+                : "");
             // Automatically fetch API data after parsing
             fetchApiData();
         }
