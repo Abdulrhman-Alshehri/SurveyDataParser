@@ -587,7 +587,7 @@
             "hub_code", "delivery_date", "delivery_time",
             "SubmittedAt",
             "NPS", "CSAT_Overall", "SpeedOfDelivery", "ShipmentCondition", "CourierBehavior",
-            "COD", "Verbatim_Improvment", "Payment Issue"
+            "COD", "Verbatim_Improvment", "Payment Details"
         ];
 
         const COLS_UNDELIVERED = [
@@ -605,7 +605,7 @@
         const COLS_ALL = [
             "Type", "Date", "Time", "Bot User", "track_number",
             "CSAT_Overall", "NPS", "SpeedOfDelivery", "ShipmentCondition", "CourierBehavior",
-            "Payment Issue", "Verbatim_Improvment",
+            "Payment Details", "Verbatim_Improvment",
             "NDR Reason", "Dispute Reason", "NDR",
             "Status", "customer_name", "Service Code", "Order Reference",
             "Currency", "Price",
@@ -1287,7 +1287,7 @@
                     "ShipmentCondition": num(sv["package condition"]) || extract(/(?:Package Condition:|How was package condition\?)\s*(\d+)/i, surveyPart),
                     "CourierBehavior": num(sv["courier's behavior"]) || extract(/(?:Courier's Behavior:|Was the courier's behavior good\?)\s*(\d+)/i, surveyPart),
                     "Issues": sv["issues"] || "",
-                    "Payment Issue": sv["payment issue"] || extract(/(?:Payment Issue:|Any payment issue\?)\s*([^,]+)/i, surveyPart),
+                    "Payment Details": sv["payment details"] || extract(/(?:Payment Details:)\s*([^,]+)/i, surveyPart),
                     "Verbatim_Improvment": sv["suggestions"] || extract(/(?:Suggestions:|How can we improve\?)\s*([^,]+)/i, surveyPart),
 
                     // Enriched shipment details.
