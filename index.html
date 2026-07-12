@@ -621,7 +621,7 @@
         // pattern — an empty cell OR a stuck template/placeholder such as
         // "{{track_number}}" or "Details" — is treated as MISSING and flagged so it
         // goes through the Step 2 mobile-number lookup.
-        const SHIPMENT_NUM_PATTERN = /\b[A-Z]{1,3}\d{7,}\b/;
+        const SHIPMENT_NUM_PATTERN = /\b(?:[A-Z]{1,3}\d{7,}|\d{10})\b/;
 
         // Known stuck-template / placeholder values that repeatedly appear in the bot
         // export in place of a real shipment number. They are explicitly rejected so
