@@ -1006,9 +1006,26 @@
             const cols = getColumns();
             // Project each row onto exactly the defined columns so the export never
             // sprouts stray, out-of-order columns from extra keys left on the objects.
+            // Columns that must be written as real numbers in the Excel output so
+            // they don't trigger the "Number Stored as Text" warning.
+            const NUMERIC_COLS = new Set([
+                "NPS", "CSAT_Overall", "SpeedOfDelivery", "ShipmentCondition",
+                "CourierBehavior", "COD", "Price",
+                "track_number", "Shipment Number",
+                "mobile", "Bot User", "worker_phone", "worker_code",
+                "Consignee Phone", "Shipper Phone"
+            ]);
             const projected = data.map(row => {
                 const o = {};
-                cols.forEach(c => { o[c] = row[c] != null ? row[c] : ""; });
+                cols.forEach(c => {
+                    let v = row[c] != null ? row[c] : "";
+                    // Coerce numeric columns: if the value looks like a number,
+                    // store it as an actual Number so SheetJS writes a numeric cell.
+                    if (NUMERIC_COLS.has(c) && v !== "" && !isNaN(v)) {
+                        v = Number(v);
+                    }
+                    o[c] = v;
+                });
                 return o;
             });
             const ws = XLSX.utils.json_to_sheet(projected, { header: cols });
@@ -1273,7 +1290,7 @@
                     "shipper name", "shipper city", "shipper country",
                     "shipper phone", "shipper code value"
                 ]);
-                const num = v => { const m = String(v || "").match(/-?\d+/); return m ? m[0] : ""; };
+                const num = v => { const m = String(v || "").match(/-?\d+/); return m ? Number(m[0]) : ""; };
 
                 return {
                     // The shipment reference exactly as it appeared after
