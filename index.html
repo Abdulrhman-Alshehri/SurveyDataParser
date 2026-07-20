@@ -591,9 +591,10 @@
         ];
 
         const COLS_UNDELIVERED = [
-            "Date", "Time", "Bot User", "Shipment Number", "NDR Reason", "Status",
-            "Customer Name", "Service Code", "Order Reference", "Customer ID Ref", "Incoterm",
-            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code"
+            "Date", "Time", "Consignee Phone", "Shipment Number", "NDR Reason", "Status",
+            "Customer Name",
+            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code",
+            "Job Done Name"
         ];
 
         const COLS_DISPUTE = [
@@ -673,8 +674,10 @@
             else if (currentMode === 'all') base = COLS_ALL;
             else base = COLS_SURVEY;
             const cols = base.slice();
-            // Only append linkage columns for non-survey modes
-            if (currentMode !== 'survey') {
+            // Only append linkage columns for dispute/all modes. Undelivered keeps a
+            // trimmed layout: its mobile is surfaced as "Consignee Phone" and the
+            // linkage results (Related Shipments / Match Status) stay internal.
+            if (currentMode === 'dispute' || currentMode === 'all') {
                 LINKAGE_COLS.forEach(c => { if (!cols.includes(c)) cols.push(c); });
             }
             return cols;
@@ -1234,6 +1237,9 @@
                     parsed["Time"] = timeStr;
                     parsed["Bot User"] = botUser;
                     parsed["User Channel ID"] = userChannelId;
+                    // The bot user's mobile IS the consignee's phone; surface it under
+                    // that name unless the row already parsed one from the details tail.
+                    if (!parsed["Consignee Phone"]) parsed["Consignee Phone"] = userChannelId;
                     parsed["Job Done Name"] = cellContent;
                     // Format SubmittedAt in Saudi local time (UTC+3).
                     // Manually offset from UTC to avoid browser locale quirks.
