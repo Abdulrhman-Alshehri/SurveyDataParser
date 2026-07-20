@@ -868,15 +868,35 @@
 
         function extractRiderInfo(events) {
             if (!events || !Array.isArray(events)) return null;
-            const deliveredEvent = events.find(ev => ev.type === 'delivered');
-            if (!deliveredEvent) return null;
+            // Prefer the delivered event. Undelivered/invalid shipments never have
+            // one — their courier info lives on the delivery-attempt event instead
+            // ("attempted"), or on the out-for-delivery "accept" event — so fall
+            // back to the most recent event that actually carries worker info.
+            const eventTime = ev => ev.event_time_utc ? Date.parse(ev.event_time_utc) || 0 : 0;
+            const hasWorker = ev => !!(ev.worker_name || ev.worker_code || ev.worker_phone);
+            const latest = list => list.length ? list.reduce((a, b) => eventTime(b) > eventTime(a) ? b : a) : null;
+            const ev = events.find(e => e.type === 'delivered')
+                || latest(events.filter(e => e.type === 'attempted' && hasWorker(e)))
+                || latest(events.filter(hasWorker));
+            if (!ev) return null;
+            // Event time in Saudi local time (UTC+3), same convention as SubmittedAt.
+            // For undelivered shipments this is the time of the delivery attempt.
+            let delivery_date = '', delivery_time = '';
+            if (ev.event_time_utc) {
+                const d = new Date(ev.event_time_utc);
+                if (!isNaN(d)) {
+                    const saudi = new Date(d.getTime() + 3 * 60 * 60 * 1000);
+                    delivery_date = saudi.toISOString().split('T')[0];
+                    delivery_time = saudi.toISOString().substring(11, 19);
+                }
+            }
             return {
-                worker_name: deliveredEvent.worker_name || '',
-                worker_code: deliveredEvent.worker_code || '',
-                worker_phone: deliveredEvent.worker_phone || '',
-                delivery_date: deliveredEvent.event_time_utc ? new Date(deliveredEvent.event_time_utc).toISOString().split('T')[0] : '',
-                delivery_time: deliveredEvent.event_time_utc ? new Date(deliveredEvent.event_time_utc).toTimeString().split(' ')[0] : '',
-                hub_code: deliveredEvent.hub_code || '',
+                worker_name: ev.worker_name || '',
+                worker_code: ev.worker_code || '',
+                worker_phone: ev.worker_phone || '',
+                delivery_date,
+                delivery_time,
+                hub_code: ev.hub_code || '',
             };
         }
 
@@ -908,12 +928,17 @@
                                     item.mobile = (apiResp.destination_details && apiResp.destination_details.phone) || '';
                                     item["COD"] = apiResp.is_cod ? 'الدفع عند الاستلام' : 'مدفوعة مسبقاً';
 
-                                    // Get rider info from delivered event if available
+                                    // Rider info from the delivered event, or the latest
+                                    // delivery attempt for undelivered shipments.
                                     if (apiResp.events) {
                                         const riderInfo = extractRiderInfo(apiResp.events);
                                         if (riderInfo) {
                                             Object.assign(item, riderInfo);
                                         }
+                                    }
+                                    // No event carried a hub? Use the shipment's own hub.
+                                    if (!item.hub_code && apiResp.hub_code) {
+                                        item.hub_code = apiResp.hub_code;
                                     }
                                 } else {
                                     // No API data, default courier_partner to SELF
