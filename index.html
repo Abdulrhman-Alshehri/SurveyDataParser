@@ -593,13 +593,13 @@
         const COLS_UNDELIVERED = [
             "Date", "Time", "Bot User", "Shipment Number", "NDR Reason", "Status",
             "Customer Name", "Service Code", "Order Reference", "Customer ID Ref", "Incoterm",
-            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "hub_code"
+            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code"
         ];
 
         const COLS_DISPUTE = [
             "Date", "Time", "Bot User", "Shipment Number", "Dispute Reason", "NDR", "Status",
             "Customer Name", "Service Code", "Order Reference",
-            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "hub_code"
+            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code"
         ];
 
         const COLS_ALL = [
@@ -612,7 +612,7 @@
             "Consignee Name", "Consignee City", "Consignee Country", "Consignee Phone",
             "Shipper Name", "Shipper City", "Shipper Country", "Shipper Phone",
             "Customer ID Ref", "Incoterm",
-            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "hub_code"
+            "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code"
         ];
 
         // --- Missing-Shipment Linkage (Steps 1-2) ---
@@ -890,12 +890,22 @@
                     delivery_time = saudi.toISOString().substring(11, 19);
                 }
             }
+            // Human label for the event the rider info (and its timestamp) came
+            // from, so an undelivered row's time is never read as a delivery time.
+            const RIDER_EVENT_LABELS = {
+                delivered: 'Delivered',
+                attempted: 'Delivery Attempt',
+                accept: 'Out for Delivery'
+            };
+            const rider_event = RIDER_EVENT_LABELS[ev.type]
+                || String(ev.type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             return {
                 worker_name: ev.worker_name || '',
                 worker_code: ev.worker_code || '',
                 worker_phone: ev.worker_phone || '',
                 delivery_date,
                 delivery_time,
+                rider_event,
                 hub_code: ev.hub_code || '',
             };
         }
