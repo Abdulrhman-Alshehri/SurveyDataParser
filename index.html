@@ -195,7 +195,7 @@
             overflow: hidden;
             display: flex;
             flex-direction: column;
-            max-height: 600px;
+            max-height: 400px;
         }
 
         .table-header-controls {
@@ -206,38 +206,105 @@
             align-items: center;
         }
 
-        .filter-bar {
-            padding: 0.75rem 1.5rem;
+        .dashboard-container {
+            margin-top: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .dashboard-card {
+            background: var(--surface);
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .dashboard-card-header {
+            padding: 1rem 1.5rem;
+            background: var(--primary--surface);
             border-bottom: 1px solid var(--border);
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            gap: 1rem;
-            flex-wrap: wrap;
-            background: var(--primary--surface);
         }
 
-        .filter-bar label {
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            font-weight: 500;
+        .dashboard-card-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin: 0;
         }
 
-        .filter-bar input[type="date"] {
-            padding: 0.4rem 0.6rem;
-            border: 1px solid var(--border);
-            border-radius: 6px;
+        .dashboard-table-wrapper {
+            overflow-x: auto;
+        }
+
+        .dashboard-table {
+            width: 100%;
+            border-collapse: collapse;
             font-size: 0.85rem;
+            white-space: nowrap;
+        }
+
+        .dashboard-table th {
+            background-color: var(--primary--focus);
             color: var(--text-main);
-            background: var(--surface);
+            font-weight: 600;
+            padding: 0.6rem 0.8rem;
+            border-bottom: 1px solid var(--border);
+            border-right: 1px solid var(--primary--border);
+            text-align: center;
         }
 
-        .filter-count {
-            margin-left: auto;
-            color: var(--text-secondary);
-            font-size: 0.85rem;
+        .dashboard-table th:first-child {
+            text-align: left;
+            position: sticky;
+            left: 0;
+            z-index: 2;
+        }
+
+        .dashboard-table td {
+            padding: 0.6rem 0.8rem;
+            border-bottom: 1px solid var(--border);
+            border-right: 1px solid rgba(0, 0, 0, 0.05);
+            text-align: center;
+            color: var(--text-main);
+        }
+
+        .dashboard-table td:first-child {
+            text-align: left;
+            font-weight: 600;
+            background-color: var(--surface);
+            position: sticky;
+            left: 0;
+            z-index: 1;
+        }
+
+        .dashboard-table th.metric-col {
+            background-color: var(--primary);
+            color: #ffffff;
+            font-weight: 700;
+        }
+
+        .dashboard-table td.metric-col {
+            font-weight: 700;
+            background-color: var(--primary--surface);
+        }
+
+        .dashboard-table tr.total-row td {
+            background-color: var(--primary--surface);
+            font-weight: 700;
+            border-top: 2px solid var(--primary--border);
+        }
+
+        .dashboard-table tr.total-row td:first-child {
+            background-color: var(--primary--surface);
+        }
+
+        .dashboard-table tr:hover td {
+            background-color: #F9FAFB;
         }
 
         .table-wrapper {
@@ -540,24 +607,16 @@
 
             <div class="table-container">
                 <div class="table-header-controls">
-                    <span class="preview-title">Data Preview</span>
+                    <div style="display: flex; align-items: center; gap: 1rem;">
+                        <span class="preview-title" style="font-weight: 700; font-size: 1.1rem; color: var(--primary);">Data Preview</span>
+                        <span class="filter-count" id="filterCount" style="font-size: 0.85rem; color: var(--text-secondary); background: var(--primary--surface); padding: 0.2rem 0.6rem; border-radius: 4px; font-weight: 500;"></span>
+                    </div>
                     <div>
                         <button class="btn btn-success" onclick="exportToExcel()">Download Results</button>
                         <button class="btn"
                             style="background: var(--background); color: var(--text-main); margin-left: 0.5rem;"
                             onclick="resetApp()">Return to Home</button>
                     </div>
-                </div>
-                <div class="filter-bar">
-                    <label>Delivery date from
-                        <input type="date" id="filterFrom">
-                    </label>
-                    <label>to
-                        <input type="date" id="filterTo">
-                    </label>
-                    <button class="btn btn-secondary" id="applyFilterBtn" style="margin-top: 0; padding: 0.4rem 1rem;">Apply</button>
-                    <button class="btn btn-secondary" id="clearFilterBtn" style="margin-top: 0; padding: 0.4rem 1rem;">Clear</button>
-                    <span class="filter-count" id="filterCount"></span>
                 </div>
                 <div class="table-wrapper">
                     <table id="previewTable">
@@ -566,6 +625,8 @@
                     </table>
                 </div>
             </div>
+
+            <div id="dashboardSection" class="dashboard-container"></div>
         </div>
     </main>
 
@@ -578,7 +639,6 @@
         // --- Configuration & State ---
         let currentMode = null; // survey, undelivered, dispute, all
         let parsedData = [];
-        let dateFilter = { from: "", to: "" }; // delivery-date range filter (Step 3)
 
         // --- Column Definitions ---
         const COLS_SURVEY = [
@@ -985,67 +1045,27 @@
 
 
         // --- UI Functions ---
-        // Effective delivery date for a row: the enriched delivery_date when present,
-        // otherwise the record's event date. Returns "YYYY-MM-DD" or "".
-        function getRowDeliveryDate(row) {
-            const d = row["delivery_date"] || row["Date"] || "";
-            const m = String(d).match(/\d{4}-\d{2}-\d{2}/);
-            return m ? m[0] : "";
-        }
-
-        // Apply the delivery-date range filter (Step 3). Rows outside the range — and,
-        // when a filter is active, rows with no resolvable delivery date — are removed.
-        function getFilteredData() {
-            const { from, to } = dateFilter;
-            if (!from && !to) return parsedData;
-            return parsedData.filter(row => {
-                const d = getRowDeliveryDate(row);
-                if (!d) return false;
-                if (from && d < from) return false;
-                if (to && d > to) return false;
-                return true;
-            });
-        }
-
         function renderPreview() {
             const cols = getColumns();
-            const data = getFilteredData();
             let theadHtml = "<tr>"; cols.forEach(col => { theadHtml += `<th>${col}</th>`; }); theadHtml += "</tr>";
             previewTable.querySelector('thead').innerHTML = theadHtml;
             let tbodyHtml = "";
-            data.slice(0, 50).forEach(row => { tbodyHtml += "<tr>"; cols.forEach(col => { tbodyHtml += `<td>${row[col] != null ? row[col] : ""}</td>`; }); tbodyHtml += "</tr>"; });
+            parsedData.slice(0, 5).forEach(row => { tbodyHtml += "<tr>"; cols.forEach(col => { tbodyHtml += `<td>${row[col] != null ? row[col] : ""}</td>`; }); tbodyHtml += "</tr>"; });
             previewTable.querySelector('tbody').innerHTML = tbodyHtml;
 
             const countEl = document.getElementById('filterCount');
             if (countEl) {
-                const filtered = (dateFilter.from || dateFilter.to);
-                countEl.innerText = filtered
-                    ? `Showing ${data.length} of ${parsedData.length} records` + (data.length > 50 ? " (first 50 shown)" : "")
-                    : `${parsedData.length} records` + (parsedData.length > 50 ? " (first 50 shown)" : "");
+                countEl.innerText = parsedData.length > 5 
+                    ? `Showing first 5 of ${parsedData.length} records` 
+                    : `${parsedData.length} records`;
             }
-        }
 
-        function applyDateFilter() {
-            dateFilter.from = (document.getElementById('filterFrom').value || "").trim();
-            dateFilter.to = (document.getElementById('filterTo').value || "").trim();
-            renderPreview();
-        }
-
-        function clearDateFilter() {
-            dateFilter = { from: "", to: "" };
-            document.getElementById('filterFrom').value = "";
-            document.getElementById('filterTo').value = "";
-            renderPreview();
+            renderDashboard();
         }
 
         function exportToExcel() {
-            const data = getFilteredData();
-            if (data.length === 0) { alert("No data to export"); return; }
+            if (parsedData.length === 0) { alert("No data to export"); return; }
             const cols = getColumns();
-            // Project each row onto exactly the defined columns so the export never
-            // sprouts stray, out-of-order columns from extra keys left on the objects.
-            // Columns that must be written as real numbers in the Excel output so
-            // they don't trigger the "Number Stored as Text" warning.
             const NUMERIC_COLS = new Set([
                 "NPS", "CSAT_Overall", "SpeedOfDelivery", "ShipmentCondition",
                 "CourierBehavior", "COD", "Price",
@@ -1053,12 +1073,10 @@
                 "mobile", "Bot User", "worker_phone", "worker_code",
                 "Consignee Phone", "Shipper Phone"
             ]);
-            const projected = data.map(row => {
+            const projected = parsedData.map(row => {
                 const o = {};
                 cols.forEach(c => {
                     let v = row[c] != null ? row[c] : "";
-                    // Coerce numeric columns: if the value looks like a number,
-                    // store it as an actual Number so SheetJS writes a numeric cell.
                     if (NUMERIC_COLS.has(c) && v !== "" && !isNaN(v)) {
                         v = Number(v);
                     }
@@ -1072,11 +1090,316 @@
             XLSX.utils.book_append_sheet(wb, ws, "Parsed Data");
             XLSX.writeFile(wb, `Parsed_${currentMode === 'all' ? 'All' : currentMode}_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.xlsx`);
         }
+
+        // --- Dashboard Generator Functions ---
+        function renderDashboard() {
+            const dashboardSec = document.getElementById('dashboardSection');
+            if (!dashboardSec) return;
+
+            if (!parsedData || parsedData.length === 0) {
+                dashboardSec.innerHTML = "";
+                return;
+            }
+
+            let html = "";
+            const showSurvey = (currentMode === 'survey' || currentMode === 'all');
+            const showUndelivered = (currentMode === 'undelivered' || currentMode === 'all');
+            const showDispute = (currentMode === 'dispute' || currentMode === 'all');
+
+            if (showSurvey) {
+                html += buildCsatTableHtml("CSAT by Hub", "hub_code", parsedData);
+                html += buildNpsTableHtml("NPS by Hub", "hub_code", parsedData);
+                html += buildCsatTableHtml("CSAT by Customer (Top 20)", "customer_name", parsedData, 20);
+                html += buildNpsTableHtml("NPS by Customer (Top 20)", "customer_name", parsedData, 20);
+            }
+
+            if (showUndelivered) {
+                html += buildReasonBreakdownTableHtml("Undelivered Breakdown by Hub", "hub_code", "NDR Reason", parsedData);
+                html += buildReasonBreakdownTableHtml("Undelivered Breakdown by Customer (Top 20)", "customer_name", "NDR Reason", parsedData, 20);
+            }
+
+            if (showDispute) {
+                html += buildReasonBreakdownTableHtml("Dispute Breakdown by Hub", "hub_code", "Dispute Reason", parsedData);
+                html += buildReasonBreakdownTableHtml("Dispute Breakdown by Customer (Top 20)", "customer_name", "Dispute Reason", parsedData, 20);
+            }
+
+            dashboardSec.innerHTML = html;
+        }
+
+        function buildCsatTableHtml(title, entityKey, data, topLimit) {
+            const validRows = data.filter(r => {
+                const v = r["CSAT_Overall"];
+                return v !== "" && v !== null && v !== undefined && !isNaN(v) && Number(v) >= 1 && Number(v) <= 5;
+            });
+
+            if (validRows.length === 0) return "";
+
+            const groups = {};
+            validRows.forEach(r => {
+                let key = (r[entityKey] || (entityKey === "customer_name" ? r["Customer Name"] : "") || "").trim();
+                if (!key) key = "Unassigned";
+                if (!groups[key]) groups[key] = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, total: 0 };
+                const score = Number(r["CSAT_Overall"]);
+                groups[key][score]++;
+                groups[key].total++;
+            });
+
+            let keys = Object.keys(groups);
+            if (topLimit) {
+                keys.sort((a, b) => groups[b].total - groups[a].total);
+                keys = keys.slice(0, topLimit);
+            } else {
+                keys.sort((a, b) => a.localeCompare(b));
+            }
+
+            let tot1 = 0, tot2 = 0, tot3 = 0, tot4 = 0, tot5 = 0, totGrand = 0;
+
+            let rowsHtml = "";
+            keys.forEach(k => {
+                const g = groups[k];
+                tot1 += g[1]; tot2 += g[2]; tot3 += g[3]; tot4 += g[4]; tot5 += g[5]; totGrand += g.total;
+                const csatVal = g.total > 0 ? Math.round(((g[4] + g[5]) / g.total) * 100) + "%" : "";
+                rowsHtml += `<tr>
+                    <td>${k}</td>
+                    <td>${g[1] || ""}</td>
+                    <td>${g[2] || ""}</td>
+                    <td>${g[3] || ""}</td>
+                    <td>${g[4] || ""}</td>
+                    <td>${g[5] || ""}</td>
+                    <td>${g.total || ""}</td>
+                    <td class="metric-col">${csatVal}</td>
+                </tr>`;
+            });
+
+            const grandCsat = totGrand > 0 ? Math.round(((tot4 + tot5) / totGrand) * 100) + "%" : "";
+            const entityHeaderLabel = entityKey === "hub_code" ? "Hubs" : "Customer";
+
+            return `
+            <div class="dashboard-card">
+                <div class="dashboard-card-header">
+                    <h3 class="dashboard-card-title">${title}</h3>
+                </div>
+                <div class="dashboard-table-wrapper">
+                    <table class="dashboard-table">
+                        <thead>
+                            <tr>
+                                <th>${entityHeaderLabel}</th>
+                                <th>1</th>
+                                <th>2</th>
+                                <th>3</th>
+                                <th>4</th>
+                                <th>5</th>
+                                <th>Grand Total</th>
+                                <th class="metric-col">CSAT</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                            <tr class="total-row">
+                                <td>Grand Total</td>
+                                <td>${tot1 || ""}</td>
+                                <td>${tot2 || ""}</td>
+                                <td>${tot3 || ""}</td>
+                                <td>${tot4 || ""}</td>
+                                <td>${tot5 || ""}</td>
+                                <td>${totGrand || ""}</td>
+                                <td class="metric-col">${grandCsat}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>`;
+        }
+
+        function buildNpsTableHtml(title, entityKey, data, topLimit) {
+            const validRows = data.filter(r => {
+                const v = r["NPS"];
+                return v !== "" && v !== null && v !== undefined && !isNaN(v) && Number(v) >= 0 && Number(v) <= 10;
+            });
+
+            if (validRows.length === 0) return "";
+
+            const groups = {};
+            validRows.forEach(r => {
+                let key = (r[entityKey] || (entityKey === "customer_name" ? r["Customer Name"] : "") || "").trim();
+                if (!key) key = "Unassigned";
+                if (!groups[key]) {
+                    groups[key] = { 0:0, 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0, total: 0 };
+                }
+                const score = Number(r["NPS"]);
+                groups[key][score]++;
+                groups[key].total++;
+            });
+
+            let keys = Object.keys(groups);
+            if (topLimit) {
+                keys.sort((a, b) => groups[b].total - groups[a].total);
+                keys = keys.slice(0, topLimit);
+            } else {
+                keys.sort((a, b) => a.localeCompare(b));
+            }
+
+            const colTotals = { 0:0, 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0, total: 0 };
+
+            let rowsHtml = "";
+            keys.forEach(k => {
+                const g = groups[k];
+                for (let i = 0; i <= 10; i++) colTotals[i] += g[i];
+                colTotals.total += g.total;
+
+                let detractorCount = 0; for (let i = 0; i <= 6; i++) detractorCount += g[i];
+                let promoterCount = 0; for (let i = 9; i <= 10; i++) promoterCount += g[i];
+
+                const detractorPct = g.total > 0 ? Math.round((detractorCount / g.total) * 100) + "%" : "";
+                const promoterPct = g.total > 0 ? Math.round((promoterCount / g.total) * 100) + "%" : "";
+                const npsPct = g.total > 0 ? Math.round(((promoterCount - detractorCount) / g.total) * 100) + "%" : "";
+
+                rowsHtml += `<tr>
+                    <td>${k}</td>
+                    ${[0,1,2,3,4,5,6,7,8,9,10].map(s => `<td>${g[s] || ""}</td>`).join("")}
+                    <td>${g.total || ""}</td>
+                    <td>${detractorPct}</td>
+                    <td>${promoterPct}</td>
+                    <td class="metric-col">${npsPct}</td>
+                </tr>`;
+            });
+
+            let overallDetractor = 0; for (let i = 0; i <= 6; i++) overallDetractor += colTotals[i];
+            let overallPromoter = 0; for (let i = 9; i <= 10; i++) overallPromoter += colTotals[i];
+            const overallDetractorPct = colTotals.total > 0 ? Math.round((overallDetractor / colTotals.total) * 100) + "%" : "";
+            const overallPromoterPct = colTotals.total > 0 ? Math.round((overallPromoter / colTotals.total) * 100) + "%" : "";
+            const overallNpsPct = colTotals.total > 0 ? Math.round(((overallPromoter - overallDetractor) / colTotals.total) * 100) + "%" : "";
+
+            const entityHeaderLabel = entityKey === "hub_code" ? "Hubs" : "Customer";
+
+            return `
+            <div class="dashboard-card">
+                <div class="dashboard-card-header">
+                    <h3 class="dashboard-card-title">${title}</h3>
+                </div>
+                <div class="dashboard-table-wrapper">
+                    <table class="dashboard-table">
+                        <thead>
+                            <tr>
+                                <th>${entityHeaderLabel}</th>
+                                ${[0,1,2,3,4,5,6,7,8,9,10].map(s => `<th>${s}</th>`).join("")}
+                                <th>Grand Total</th>
+                                <th>Detractor</th>
+                                <th>Promoter</th>
+                                <th class="metric-col">NPS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                            <tr class="total-row">
+                                <td>Grand Total</td>
+                                ${[0,1,2,3,4,5,6,7,8,9,10].map(s => `<td>${colTotals[s] || ""}</td>`).join("")}
+                                <td>${colTotals.total || ""}</td>
+                                <td>${overallDetractorPct}</td>
+                                <td>${overallPromoterPct}</td>
+                                <td class="metric-col">${overallNpsPct}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>`;
+        }
+
+        function buildReasonBreakdownTableHtml(title, entityKey, reasonFieldKey, data, topLimit) {
+            const validRows = data.filter(r => {
+                const reason = (r[reasonFieldKey] || r["NDR Reason"] || r["NDR"] || r["Dispute Reason"] || "").trim();
+                return reason !== "";
+            });
+
+            if (validRows.length === 0) return "";
+
+            const reasonCounts = {};
+            validRows.forEach(r => {
+                const reason = (r[reasonFieldKey] || r["NDR Reason"] || r["NDR"] || r["Dispute Reason"] || "").trim();
+                reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+            });
+
+            let topReasons = Object.keys(reasonCounts).sort((a, b) => reasonCounts[b] - reasonCounts[a]).slice(0, 5);
+
+            const groups = {};
+            validRows.forEach(r => {
+                let key = (r[entityKey] || (entityKey === "customer_name" ? r["Customer Name"] : "") || "").trim();
+                if (!key) key = "Unassigned";
+                if (!groups[key]) {
+                    groups[key] = { total: 0, reasons: {} };
+                    topReasons.forEach(tr => groups[key].reasons[tr] = 0);
+                    groups[key].reasons["Other"] = 0;
+                }
+                const reason = (r[reasonFieldKey] || r["NDR Reason"] || r["NDR"] || r["Dispute Reason"] || "").trim();
+                if (topReasons.includes(reason)) {
+                    groups[key].reasons[reason]++;
+                } else {
+                    groups[key].reasons["Other"]++;
+                }
+                groups[key].total++;
+            });
+
+            let keys = Object.keys(groups);
+            if (topLimit) {
+                keys.sort((a, b) => groups[b].total - groups[a].total);
+                keys = keys.slice(0, topLimit);
+            } else {
+                keys.sort((a, b) => a.localeCompare(b));
+            }
+
+            const reasonColTotals = {};
+            topReasons.forEach(tr => reasonColTotals[tr] = 0);
+            reasonColTotals["Other"] = 0;
+            let grandTotalSum = 0;
+
+            let rowsHtml = "";
+            keys.forEach(k => {
+                const g = groups[k];
+                grandTotalSum += g.total;
+                topReasons.forEach(tr => reasonColTotals[tr] += g.reasons[tr]);
+                reasonColTotals["Other"] += g.reasons["Other"];
+
+                rowsHtml += `<tr>
+                    <td>${k}</td>
+                    ${topReasons.map(tr => `<td>${g.reasons[tr] || ""}</td>`).join("")}
+                    <td>${g.reasons["Other"] || ""}</td>
+                    <td class="metric-col">${g.total || ""}</td>
+                </tr>`;
+            });
+
+            const entityHeaderLabel = entityKey === "hub_code" ? "Hubs" : "Customer";
+
+            return `
+            <div class="dashboard-card">
+                <div class="dashboard-card-header">
+                    <h3 class="dashboard-card-title">${title}</h3>
+                </div>
+                <div class="dashboard-table-wrapper">
+                    <table class="dashboard-table">
+                        <thead>
+                            <tr>
+                                <th>${entityHeaderLabel}</th>
+                                ${topReasons.map(tr => `<th>${tr}</th>`).join("")}
+                                <th>Other</th>
+                                <th class="metric-col">Grand Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml}
+                            <tr class="total-row">
+                                <td>Grand Total</td>
+                                ${topReasons.map(tr => `<td>${reasonColTotals[tr] || ""}</td>`).join("")}
+                                <td>${reasonColTotals["Other"] || ""}</td>
+                                <td class="metric-col">${grandTotalSum || ""}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>`;
+        }
+
         function resetApp() {
             parsedData = [];
-            dateFilter = { from: "", to: "" };
-            const ff = document.getElementById('filterFrom'); if (ff) ff.value = "";
-            const ft = document.getElementById('filterTo'); if (ft) ft.value = "";
             fileInput.value = "";
             // Hide Results & Upload, Show Selection
             resultsSection.classList.add('hidden');
@@ -1094,6 +1417,8 @@
 
             errorMsg.style.display = 'none';
             previewTable.querySelector('tbody').innerHTML = "";
+            const dashSec = document.getElementById('dashboardSection');
+            if (dashSec) dashSec.innerHTML = "";
         }
         function showError(msg) {
             console.error("Error Shown:", msg);
@@ -1134,11 +1459,7 @@
             if (e.target.files.length) handleFile(e.target.files[0]);
         });
 
-        // Date-range filter controls (Step 3)
-        document.getElementById('applyFilterBtn').addEventListener('click', applyDateFilter);
-        document.getElementById('clearFilterBtn').addEventListener('click', clearDateFilter);
-        document.getElementById('filterFrom').addEventListener('change', applyDateFilter);
-        document.getElementById('filterTo').addEventListener('change', applyDateFilter);
+
 
         // --- Core Logic ---
         function handleFile(file) {
@@ -1331,7 +1652,17 @@
                     "shipper name", "shipper city", "shipper country",
                     "shipper phone", "shipper code value"
                 ]);
-                const num = v => { const m = String(v || "").match(/-?\d+/); return m ? Number(m[0]) : ""; };
+                const parseScore = (v, fallbackStr) => {
+                    if (v !== undefined && v !== null && String(v).trim() !== "") {
+                        const m = String(v).match(/-?\d+/);
+                        if (m) return Number(m[0]);
+                    }
+                    if (fallbackStr !== undefined && fallbackStr !== null && String(fallbackStr).trim() !== "") {
+                        const m = String(fallbackStr).match(/-?\d+/);
+                        if (m) return Number(m[0]);
+                    }
+                    return "";
+                };
 
                 return {
                     // The shipment reference exactly as it appeared after
@@ -1339,11 +1670,11 @@
                     // It never reaches into the enriched tail, so "Shipment Details"
                     // can no longer leak in as "Details".
                     "track_number": extract(/Survey for shipment:\s*([^,]+)/i, surveyPart),
-                    "CSAT_Overall": num(sv["overall experience"]) || extract(/(?:Overall Experience:|How was your experience\?)\s*(\d+)/i, surveyPart),
-                    "NPS": num(sv["recommendation rate"]) || extract(/Recommendation Rate:\s*(\d+)/i, surveyPart),
-                    "SpeedOfDelivery": num(sv["delivery speed"]) || extract(/(?:Delivery Speed:|How is delivery speed\?)\s*(\d+)/i, surveyPart),
-                    "ShipmentCondition": num(sv["package condition"]) || extract(/(?:Package Condition:|How was package condition\?)\s*(\d+)/i, surveyPart),
-                    "CourierBehavior": num(sv["courier's behavior"]) || extract(/(?:Courier's Behavior:|Was the courier's behavior good\?)\s*(\d+)/i, surveyPart),
+                    "CSAT_Overall": parseScore(sv["overall experience"], extract(/(?:Overall Experience:|How was your experience\?)\s*(\d+)/i, surveyPart)),
+                    "NPS": parseScore(sv["recommendation rate"], extract(/Recommendation Rate:\s*(\d+)/i, surveyPart)),
+                    "SpeedOfDelivery": parseScore(sv["delivery speed"], extract(/(?:Delivery Speed:|How is delivery speed\?)\s*(\d+)/i, surveyPart)),
+                    "ShipmentCondition": parseScore(sv["package condition"], extract(/(?:Package Condition:|How was package condition\?)\s*(\d+)/i, surveyPart)),
+                    "CourierBehavior": parseScore(sv["courier's behavior"], extract(/(?:Courier's Behavior:|Was the courier's behavior good\?)\s*(\d+)/i, surveyPart)),
                     "Issues": sv["issues"] || "",
                     "Payment Details": sv["payment details"] || extract(/(?:Payment Details:)\s*([^,]+)/i, surveyPart),
                     "Verbatim_Improvment": sv["suggestions"] || extract(/(?:Suggestions:|How can we improve\?)\s*([^,]+)/i, surveyPart),
