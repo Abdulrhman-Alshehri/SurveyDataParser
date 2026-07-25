@@ -1176,7 +1176,165 @@
             reader.readAsArrayBuffer(file);
         }
 
+        // Formats an ISO timestamp as Saudi local time (UTC+3) for display,
+        // e.g. "Jul 24, 9:07 PM". Falls back to the raw string when unparsable.
+        function formatSaudiSubmittedAt(rawEventTime) {
+            if (rawEventTime && typeof rawEventTime === 'string' && rawEventTime.includes("T")) {
+                const dtObj = new Date(rawEventTime);
+                if (!isNaN(dtObj)) {
+                    const saudi = new Date(dtObj.getTime() + 3 * 60 * 60 * 1000);
+                    const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                    const mon = MON[saudi.getUTCMonth()];
+                    const day = saudi.getUTCDate();
+                    const hh  = saudi.getUTCHours();
+                    const mm  = saudi.getUTCMinutes();
+                    const ampm = hh >= 12 ? "PM" : "AM";
+                    const h12  = hh % 12 || 12;
+                    return `${mon} ${day}, ${h12}:${String(mm).padStart(2, "0")} ${ampm}`;
+                }
+            }
+            return rawEventTime || "";
+        }
+
+        // Some exports (e.g. a "Daily Survey Report" pulled straight from the
+        // reporting DB) hand us one normalized column per field instead of the
+        // bot's concatenated "Key: value, Key: value|||..." text blob. Detect that
+        // shape from the header row so those files parse directly by column
+        // instead of silently producing zero rows (there is no blob cell for the
+        // old substring-search heuristic to find).
+        const FLAT_SURVEY_HEADER_MARKERS = [
+            "survey for shipment", "overall experience", "recommendation rate", "delivery speed"
+        ];
+        function isFlatSurveyHeader(headerRow) {
+            if (!Array.isArray(headerRow)) return false;
+            const norm = headerRow.map(h => String(h || '').trim().toLowerCase());
+            return FLAT_SURVEY_HEADER_MARKERS.every(marker => norm.includes(marker));
+        }
+
+        // The "Payment Details" column sometimes holds a real free-text value,
+        // but more often leaks the neighbouring "Suggestions:" segment verbatim
+        // (e.g. ", Suggestions: ," or ", Suggestions: Package was 100 degrees ,")
+        // because no payment details were actually entered. When that leak is
+        // present there is no real payment-details value, so it goes to the
+        // suggestion field only; otherwise the whole cell is genuine free text.
+        function splitPaymentDetailsCell(raw) {
+            const s = String(raw || "").trim();
+            const m = s.match(/Suggestions\s*:\s*([^,]*)/i);
+            if (m) return { paymentDetails: "", suggestion: m[1].trim() };
+            return { paymentDetails: s.replace(/^,+|,+$/g, '').trim(), suggestion: "" };
+        }
+
+        // An "Issues" cell that only contains a leaked "Payment Issue:" label
+        // (no real issue was selected) should read as no issues, not as text.
+        function cleanIssuesCell(raw) {
+            const s = String(raw || "").trim();
+            if (/^,?\s*Payment Issue\s*:/i.test(s)) return "";
+            return s.replace(/^,+|,+$/g, '').trim();
+        }
+
+        function processFlatSurveyRows(rows) {
+            parsedData = [];
+            if (currentMode !== 'survey' && currentMode !== 'all') return;
+
+            const header = rows[0].map(h => String(h || '').trim().toLowerCase());
+            const idx = name => header.indexOf(name);
+            const col = {
+                timestamp: idx('_timestamp'),
+                userChannelId: idx('_user_channel_id'),
+                userId: idx('_user_id'),
+                shipment: idx('survey for shipment'),
+                overall: idx('overall experience'),
+                nps: idx('recommendation rate'),
+                speed: idx('delivery speed'),
+                condition: idx('package condition'),
+                courier: idx("courier's behavior"),
+                issues: idx('issues'),
+                paymentDetails: idx('payment details'),
+                status: idx('status'),
+                customerName: idx('customer name'),
+                serviceCode: idx('service code'),
+                orderRef: idx('order reference'),
+                customerIdRef: idx('customer id reference'),
+                incoterm: idx('incoterm'),
+                currency: idx('currency'),
+                price: idx('price'),
+                consigneeName: idx('consignee name'),
+                consigneeCity: idx('consignee city'),
+                consigneeCountry: idx('consignee country'),
+                consigneePhone: idx('consignee phone'),
+                shipperName: idx('shipper name'),
+                shipperCity: idx('shipper city'),
+                shipperCountry: idx('shipper country'),
+                shipperPhone: idx('shipper phone'),
+            };
+            const get = (row, i) => (i >= 0 && row[i] !== undefined && row[i] !== null) ? String(row[i]).trim() : "";
+            const num = v => { const m = String(v || "").match(/-?\d+/); return m ? Number(m[0]) : ""; };
+
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (!row || row.length === 0) continue;
+
+                const rawEventTime = get(row, col.timestamp);
+                const userChannelId = get(row, col.userChannelId);
+                let dateStr = rawEventTime, timeStr = "";
+                if (rawEventTime && rawEventTime.includes("T")) {
+                    const dateObj = new Date(rawEventTime);
+                    if (!isNaN(dateObj)) {
+                        dateStr = dateObj.toISOString().substring(0, 10);
+                        timeStr = dateObj.toISOString().substring(11, 19);
+                    }
+                }
+
+                const paymentDetailsRaw = get(row, col.paymentDetails);
+                const paymentDetailsSplit = splitPaymentDetailsCell(paymentDetailsRaw);
+                const consigneePhone = get(row, col.consigneePhone) || userChannelId;
+
+                const parsed = {
+                    "track_number": get(row, col.shipment),
+                    "CSAT_Overall": num(get(row, col.overall)),
+                    "NPS": num(get(row, col.nps)),
+                    "SpeedOfDelivery": num(get(row, col.speed)),
+                    "ShipmentCondition": num(get(row, col.condition)),
+                    "CourierBehavior": num(get(row, col.courier)),
+                    "Issues": cleanIssuesCell(get(row, col.issues)),
+                    "Payment Details": paymentDetailsSplit.paymentDetails,
+                    "Verbatim_Improvment": paymentDetailsSplit.suggestion,
+
+                    "customer_name": get(row, col.customerName),
+                    "Status": get(row, col.status),
+                    "Service Code": get(row, col.serviceCode),
+                    "Order Reference": get(row, col.orderRef),
+                    "Customer ID Ref": get(row, col.customerIdRef),
+                    "Incoterm": get(row, col.incoterm),
+                    "Currency": get(row, col.currency),
+                    "Price": get(row, col.price),
+                    "Consignee Name": get(row, col.consigneeName),
+                    "Consignee City": get(row, col.consigneeCity),
+                    "Consignee Country": get(row, col.consigneeCountry),
+                    "Consignee Phone": consigneePhone,
+                    "Shipper Name": get(row, col.shipperName),
+                    "Shipper City": get(row, col.shipperCity),
+                    "Shipper Country": get(row, col.shipperCountry),
+                    "Shipper Phone": get(row, col.shipperPhone),
+
+                    "Date": dateStr,
+                    "Time": timeStr,
+                    "Bot User": get(row, col.userId),
+                    "User Channel ID": userChannelId,
+                    "SubmittedAt": formatSaudiSubmittedAt(rawEventTime),
+                    "Job Done Name": get(row, col.shipment),
+                };
+                if (currentMode === 'all') parsed["Type"] = "Survey";
+                parsedData.push(parsed);
+            }
+        }
+
         async function processRows(rows) {
+            if (rows.length > 0 && isFlatSurveyHeader(rows[0])) {
+                processFlatSurveyRows(rows);
+                fetchApiData();
+                return;
+            }
             parsedData = [];
             for (let i = 0; i < rows.length; i++) {
                 const row = rows[i];
@@ -1242,25 +1400,7 @@
                     if (!parsed["Consignee Phone"]) parsed["Consignee Phone"] = userChannelId;
                     parsed["Job Done Name"] = cellContent;
                     // Format SubmittedAt in Saudi local time (UTC+3).
-                    // Manually offset from UTC to avoid browser locale quirks.
-                    if (rawEventTime && typeof rawEventTime === 'string' && rawEventTime.includes("T")) {
-                        const dtObj = new Date(rawEventTime);
-                        if (!isNaN(dtObj)) {
-                            const saudi = new Date(dtObj.getTime() + 3 * 60 * 60 * 1000);
-                            const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-                            const mon = MON[saudi.getUTCMonth()];
-                            const day = saudi.getUTCDate();
-                            const hh  = saudi.getUTCHours();
-                            const mm  = saudi.getUTCMinutes();
-                            const ampm = hh >= 12 ? "PM" : "AM";
-                            const h12  = hh % 12 || 12;
-                            parsed["SubmittedAt"] = `${mon} ${day}, ${h12}:${String(mm).padStart(2, "0")} ${ampm}`;
-                        } else {
-                            parsed["SubmittedAt"] = rawEventTime;
-                        }
-                    } else {
-                        parsed["SubmittedAt"] = rawEventTime || "";
-                    }
+                    parsed["SubmittedAt"] = formatSaudiSubmittedAt(rawEventTime);
                     if (currentMode === 'all') {
                         const typeLabels = { survey: 'Survey', undelivered: 'Undelivered / Invalid', dispute: 'Dispute' };
                         parsed["Type"] = typeLabels[rowMode] || rowMode;
