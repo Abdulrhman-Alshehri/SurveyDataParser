@@ -936,7 +936,10 @@
             // ("attempted"), or on the out-for-delivery "accept" event — so fall
             // back to the most recent event that actually carries worker info.
             const eventTime = ev => ev.event_time_utc ? Date.parse(ev.event_time_utc) || 0 : 0;
-            const hasWorker = ev => !!(ev.worker_name || ev.worker_code || ev.worker_phone);
+            // SELF-fleet (in-house) shipments report the rider under employee_name/
+            // employee_code instead of worker_name/worker_code/worker_phone — check
+            // both pairs so self-fleet NDR attempts aren't treated as riderless.
+            const hasWorker = ev => !!(ev.worker_name || ev.worker_code || ev.worker_phone || ev.employee_name || ev.employee_code);
             const latest = list => list.length ? list.reduce((a, b) => eventTime(b) > eventTime(a) ? b : a) : null;
             const ev = events.find(e => e.type === 'delivered')
                 || latest(events.filter(e => e.type === 'attempted' && hasWorker(e)))
@@ -963,8 +966,8 @@
             const rider_event = RIDER_EVENT_LABELS[ev.type]
                 || String(ev.type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             return {
-                worker_name: ev.worker_name || '',
-                worker_code: ev.worker_code || '',
+                worker_name: ev.worker_name || ev.employee_name || '',
+                worker_code: ev.worker_code || ev.employee_code || '',
                 worker_phone: ev.worker_phone || '',
                 delivery_date,
                 delivery_time,
