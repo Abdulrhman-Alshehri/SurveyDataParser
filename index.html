@@ -929,8 +929,16 @@
             }
         }
 
-        function extractRiderInfo(events) {
+        function extractRiderInfo(events, courierPartner, partnerReference) {
             if (!events || !Array.isArray(events)) return null;
+            // Shipments handed to a courier partner (JNT, ARAMEX, IMILE, …) are
+            // delivered by that partner's own rider, who never appears in our
+            // events. The only names on such shipments belong to warehouse staff
+            // (added_to_bag, assigned_courier_partner) — they must never stand in
+            // for the rider, so 3PL shipments only ever look at last-mile events.
+            const partner = String(courierPartner || '').trim();
+            const is3PL = !!partner && partner.toUpperCase() !== 'SELF';
+            const LAST_MILE_TYPES = new Set(['delivered', 'attempted', 'accept']);
             // Prefer the delivered event. Undelivered/invalid shipments never have
             // one — their courier info lives on the delivery-attempt event instead
             // ("attempted"), or on the out-for-delivery "accept" event — so fall
@@ -943,7 +951,9 @@
             const latest = list => list.length ? list.reduce((a, b) => eventTime(b) > eventTime(a) ? b : a) : null;
             const ev = events.find(e => e.type === 'delivered')
                 || latest(events.filter(e => e.type === 'attempted' && hasWorker(e)))
-                || latest(events.filter(hasWorker));
+                || (is3PL
+                    ? latest(events.filter(e => LAST_MILE_TYPES.has(e.type)))
+                    : latest(events.filter(hasWorker)));
             if (!ev) return null;
             // Event time in Saudi local time (UTC+3), same convention as SubmittedAt.
             // For undelivered shipments this is the time of the delivery attempt.
@@ -965,10 +975,22 @@
             };
             const rider_event = RIDER_EVENT_LABELS[ev.type]
                 || String(ev.type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            let worker_name = ev.worker_name || ev.employee_name || '';
+            let worker_code = ev.worker_code || ev.employee_code || '';
+            let worker_phone = ev.worker_phone || '';
+            // 3PL shipment with no rider of ours on the last-mile event: attribute
+            // the delivery to the courier company itself rather than leaving the
+            // row blank. The partner's own AWB is the closest thing to a code, and
+            // the company name stands in for the unreachable rider's phone.
+            if (is3PL && !worker_name && !worker_code && !worker_phone) {
+                worker_name = partner;
+                worker_code = String(ev.courier_partner_reference_number || partnerReference || '').trim() || partner;
+                worker_phone = partner;
+            }
             return {
-                worker_name: ev.worker_name || ev.employee_name || '',
-                worker_code: ev.worker_code || ev.employee_code || '',
-                worker_phone: ev.worker_phone || '',
+                worker_name,
+                worker_code,
+                worker_phone,
                 delivery_date,
                 delivery_time,
                 rider_event,
@@ -1007,7 +1029,7 @@
                                     // Rider info from the delivered event, or the latest
                                     // delivery attempt for undelivered shipments.
                                     if (apiResp.events) {
-                                        const riderInfo = extractRiderInfo(apiResp.events);
+                                        const riderInfo = extractRiderInfo(apiResp.events, item.courier_partner, apiResp.courier_partner_reference_number);
                                         if (riderInfo) {
                                             Object.assign(item, riderInfo);
                                         }
