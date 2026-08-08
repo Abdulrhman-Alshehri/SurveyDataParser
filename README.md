@@ -84,8 +84,18 @@ This project is configured for **Netlify**.
 ## 🖼️ POD Summary (Undelivered mode)
 
 Each undelivered shipment's proof-of-delivery images are described by Azure AI Vision
-(Image Analysis 4.0, `tags` + `read`) and written into the **POD Summary** column, next
-to `NDR Reason`, so the two can be compared by eye.
+(Image Analysis 4.0, `tags` + `read`) and written into several columns beside
+`NDR Reason`, so the two can be compared by eye.
+
+| Column | Example | What it is |
+|---|---|---|
+| `POD Short Summary` | `الغي الطلب` | The customer's closing line — usually settles the row on its own. For a photo, the scene tags. |
+| `POD Type` | `Chat screenshot` | `Chat screenshot` / `Photo` / `No POD` / `Unreachable`. Filterable. |
+| `Phone Match` | `Match` | Compares any phone number visible in the POD against the consignee's. `MISMATCH` means the courier photographed a conversation with somebody else. |
+| `Customer Said` | `بس أنا ابي ارجع… / لا / الغي الطلب` | Customer-side lines only, courier chatter dropped. |
+| `POD Images` | `1` | How many images back the summary. |
+| `Attempts` | `1` | Delivery attempt count; repeats with the same NDR reason are a pattern. |
+| `POD Full Details` | *(multi-line)* | The complete transcript. Parked at the far right — collapse it until a short column looks wrong. |
 
 The summary is assembled deterministically from the Azure response — **nothing judges
 whether the POD supports the NDR reason**; that call is left to the reviewer. Chat
@@ -98,7 +108,8 @@ Notes:
 - At most 4 images per shipment are analyzed.
 - Some POD URLs return HTTP 403 from S3; those are reported as unreachable rather than
   silently dropped.
-- The cell is multi-line. Enable **Wrap Text** on the column in Excel to read it laid out.
+- `POD Full Details` is multi-line. Enable **Wrap Text** on that column in Excel to read
+  it laid out.
 
 ## 📝 Usage Guide
 

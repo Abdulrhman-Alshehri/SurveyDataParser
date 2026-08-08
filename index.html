@@ -650,11 +650,16 @@
             "COD", "Verbatim_Improvment", "Payment Details"
         ];
 
+        // The POD columns are ordered for scanning: the short signals sit next to
+        // "NDR Reason" so a row can be judged at a glance, and the full transcript is
+        // parked at the far right where it can be collapsed until it is needed.
         const COLS_UNDELIVERED = [
-            "Date", "Time", "Consignee Phone", "Shipment Number", "NDR Reason", "POD Summary", "Status",
-            "Customer Name",
+            "Date", "Time", "Consignee Phone", "Shipment Number", "NDR Reason",
+            "POD Short Summary", "POD Type", "Phone Match", "Customer Said", "POD Images", "Attempts",
+            "Status", "COD", "Customer Name",
             "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code",
-            "Job Done Name"
+            "Job Done Name",
+            "POD Full Details"
         ];
 
         const COLS_DISPUTE = [
@@ -1056,11 +1061,31 @@
             return null;
         }
 
-        // Builds the "POD Summary" cell for one shipment.
-        async function buildPodSummary(urls) {
-            if (!urls.length) return "No POD attached";
+        // Long cells are unreadable at a glance, so the short columns are capped.
+        const POD_SHORT_MAX = 90;
 
-            const parts = [];
+        // Columns carrying OCR text, which must be HTML-escaped before preview.
+        const POD_TEXT_COLS = new Set(["POD Full Details", "POD Short Summary", "Customer Said"]);
+
+        function truncatePod(s, n) {
+            s = String(s == null ? "" : s);
+            return s.length > n ? s.slice(0, n - 1) + "…" : s;
+        }
+
+        // Builds every POD column for one shipment from its image URLs.
+        async function buildPodFields(urls, consigneePhone) {
+            const out = {
+                "POD Full Details": "No POD attached",
+                "POD Short Summary": "",
+                "POD Type": "No POD",
+                "Phone Match": "",
+                "Customer Said": "",
+                "POD Images": urls.length
+            };
+            if (!urls.length) return out;
+
+            const parts = [], customerLines = [], phones = [], kinds = [];
+            let lastCustomerLine = "", scene = "";
             let unreachable = 0, failed = 0;
 
             for (let i = 0; i < urls.length; i++) {
@@ -1069,6 +1094,11 @@
                     if (result && result.unreachable) unreachable++; else failed++;
                     continue;
                 }
+                kinds.push(result.kind);
+                (result.customerLines || []).forEach(l => customerLines.push(l));
+                if (result.lastCustomerLine) lastCustomerLine = result.lastCustomerLine;
+                if (!scene && result.scene) scene = result.scene;
+                (result.phones || []).forEach(p => { if (!phones.includes(p)) phones.push(p); });
                 parts.push(urls.length > 1
                     ? `Image ${i + 1} of ${urls.length} — ${result.summary}`
                     : result.summary);
@@ -1078,8 +1108,27 @@
             if (unreachable) notes.push(`${unreachable} image(s) unreachable (403)`);
             if (failed) notes.push(`${failed} image(s) could not be analyzed`);
 
-            if (!parts.length) return notes.length ? notes.join("; ") : "No POD attached";
-            return parts.concat(notes).join("\n");
+            if (!parts.length) {
+                out["POD Full Details"] = notes.length ? notes.join("; ") : "No POD attached";
+                out["POD Type"] = unreachable ? "Unreachable" : (failed ? "Analysis failed" : "No POD");
+                return out;
+            }
+
+            out["POD Full Details"] = parts.concat(notes).join("\n");
+            out["POD Type"] = kinds.includes("screenshot") ? "Chat screenshot" : "Photo";
+            // For a chat the closing customer line is the punchline; for a photo the
+            // scene tags are the nearest equivalent.
+            out["POD Short Summary"] = truncatePod(lastCustomerLine || scene, POD_SHORT_MAX);
+            out["Customer Said"] = truncatePod(customerLines.join(" / "), POD_SHORT_MAX);
+
+            // A number in the POD that is not the consignee's suggests the courier
+            // photographed a conversation with somebody else.
+            const want = normalizeMobile(consigneePhone);
+            if (!phones.length) out["Phone Match"] = "No phone in POD";
+            else if (!want) out["Phone Match"] = "No consignee phone";
+            else out["Phone Match"] = phones.some(p => normalizeMobile(p) === want) ? "Match" : "MISMATCH";
+
+            return out;
         }
 
         async function fetchApiData() {
@@ -1110,6 +1159,8 @@
                                     // Customer mobile and COD flag from root of API response
                                     item.mobile = (apiResp.destination_details && apiResp.destination_details.phone) || '';
                                     item["COD"] = apiResp.is_cod ? 'الدفع عند الاستلام' : 'مدفوعة مسبقاً';
+                                    // Repeat attempts carrying the same NDR reason are a pattern.
+                                    item["Attempts"] = apiResp.attempt_count != null ? apiResp.attempt_count : "";
 
                                     // Rider info from the delivered event, or the latest
                                     // delivery attempt for undelivered shipments.
@@ -1127,7 +1178,11 @@
                                     // POD images are only surfaced in Undelivered mode,
                                     // where the summary is compared against "NDR Reason".
                                     if (currentMode === 'undelivered') {
-                                        podQueue.push({ item, urls: collectPodUrls(apiResp) });
+                                        podQueue.push({
+                                            item,
+                                            urls: collectPodUrls(apiResp),
+                                            consigneePhone: (apiResp.destination_details && apiResp.destination_details.phone) || ""
+                                        });
                                     }
                                 } else {
                                     // No API data, default courier_partner to SELF
@@ -1158,10 +1213,12 @@
                 for (let i = 0; i < podQueue.length; i++) {
                     showLoading(true, `Analyzing POD images (${i + 1}/${podQueue.length})...`);
                     try {
-                        podQueue[i].item["POD Summary"] = await buildPodSummary(podQueue[i].urls);
+                        const fields = await buildPodFields(podQueue[i].urls, podQueue[i].consigneePhone);
+                        Object.assign(podQueue[i].item, fields);
                     } catch (e) {
-                        console.warn("POD summary failed:", e);
-                        podQueue[i].item["POD Summary"] = "Analysis failed";
+                        console.warn("POD analysis failed:", e);
+                        podQueue[i].item["POD Full Details"] = "Analysis failed";
+                        podQueue[i].item["POD Type"] = "Analysis failed";
                     }
                 }
             }
@@ -1186,10 +1243,11 @@
                 tbodyHtml += "<tr>";
                 cols.forEach(col => {
                     const raw = row[col] != null ? row[col] : "";
-                    if (col === "POD Summary") {
-                        // OCR text is untrusted and multi-line: escape it, and keep the
-                        // line breaks that make the conversation readable.
-                        tbodyHtml += `<td style="white-space:pre-line;min-width:320px;text-align:left">${escapeHtml(raw)}</td>`;
+                    if (POD_TEXT_COLS.has(col)) {
+                        // OCR text is untrusted: escape it. "POD Full Details" is also
+                        // multi-line, so keep the breaks that make the chat readable.
+                        const wide = col === "POD Full Details";
+                        tbodyHtml += `<td style="white-space:pre-line;text-align:left${wide ? ';min-width:320px' : ''}">${escapeHtml(raw)}</td>`;
                     } else {
                         tbodyHtml += `<td>${raw}</td>`;
                     }
@@ -1216,7 +1274,8 @@
                 "CourierBehavior", "COD", "Price",
                 "track_number", "Shipment Number",
                 "mobile", "Bot User", "worker_phone", "worker_code",
-                "Consignee Phone", "Shipper Phone"
+                "Consignee Phone", "Shipper Phone",
+                "POD Images", "Attempts"
             ]);
             const projected = parsedData.map(row => {
                 const o = {};
@@ -1230,10 +1289,11 @@
                 return o;
             });
             const ws = XLSX.utils.json_to_sheet(projected, { header: cols });
-            // The POD summary is a multi-line transcript, so give it room. Excel still
-            // needs "Wrap Text" switched on to show the line breaks laid out.
-            ws['!cols'] = cols.map(c => ({ wch: c === "POD Summary" ? 70 : 20 }));
-            const podIdx = cols.indexOf("POD Summary");
+            // "POD Full Details" is a multi-line transcript, so give it room. Excel
+            // still needs "Wrap Text" switched on to lay the line breaks out.
+            const POD_WIDTHS = { "POD Full Details": 70, "POD Short Summary": 32, "Customer Said": 40 };
+            ws['!cols'] = cols.map(c => ({ wch: POD_WIDTHS[c] || 20 }));
+            const podIdx = cols.indexOf("POD Full Details");
             if (podIdx !== -1) {
                 for (let r = 1; r <= projected.length; r++) {
                     const ref = XLSX.utils.encode_cell({ c: podIdx, r });
