@@ -650,16 +650,15 @@
             "COD", "Verbatim_Improvment", "Payment Details"
         ];
 
-        // The POD columns are ordered for scanning: the short signals sit next to
-        // "NDR Reason" so a row can be judged at a glance, and the full transcript is
-        // parked at the far right where it can be collapsed until it is needed.
+        // The POD columns are grouped together next to "NDR Reason" so a row can be
+        // judged without scrolling: short signals first, then the full transcript.
         const COLS_UNDELIVERED = [
             "Date", "Time", "Consignee Phone", "Shipment Number", "NDR Reason",
-            "POD Short Summary", "POD Type", "Phone Match", "Customer Said", "POD Images", "Attempts",
+            "POD Short Summary", "POD Type", "POD Full Details",
+            "Phone Match", "Customer Said", "POD Images", "Attempts",
             "Status", "COD", "Customer Name",
             "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code",
-            "Job Done Name",
-            "POD Full Details"
+            "Job Done Name"
         ];
 
         const COLS_DISPUTE = [
@@ -1111,7 +1110,7 @@
 
             const parts = [], customerLines = [], phones = [], kinds = [];
             let lastCustomerLine = "", scene = "";
-            let unreachable = 0, failed = 0;
+            let unreachable = 0, failed = 0, readable = 0;
 
             for (let i = 0; i < urls.length; i++) {
                 const result = await analyzePodImage(urls[i]);
@@ -1120,6 +1119,7 @@
                     continue;
                 }
                 kinds.push(result.kind);
+                readable += result.readable || 0;
                 (result.customerLines || []).forEach(l => customerLines.push(l));
                 if (result.lastCustomerLine) lastCustomerLine = result.lastCustomerLine;
                 if (!scene && result.scene) scene = result.scene;
@@ -1142,16 +1142,26 @@
             out["POD Full Details"] = parts.concat(notes).join("\n");
             out["POD Type"] = kinds.includes("screenshot") ? "Chat screenshot" : "Photo";
             // For a chat the closing customer line is the punchline; for a photo the
-            // scene tags are the nearest equivalent.
-            out["POD Short Summary"] = truncatePod(lastCustomerLine || scene, POD_SHORT_MAX);
+            // scene tags are the nearest equivalent. Say so plainly when the images
+            // carried nothing readable, rather than leaving the cell blank.
+            out["POD Short Summary"] = truncatePod(
+                lastCustomerLine || scene || (readable ? "" : "No readable text"),
+                POD_SHORT_MAX);
             out["Customer Said"] = truncatePod(customerLines.join(" / "), POD_SHORT_MAX);
 
             // A number in the POD that is not the consignee's suggests the courier
             // photographed a conversation with somebody else.
             const want = normalizeMobile(consigneePhone);
-            if (!phones.length) out["Phone Match"] = "No phone in POD";
+            const seenPhones = phones.map(normalizeMobile).filter(Boolean);
+            if (!seenPhones.length) out["Phone Match"] = "No phone in POD";
             else if (!want) out["Phone Match"] = "No consignee phone";
-            else out["Phone Match"] = phones.some(p => normalizeMobile(p) === want) ? "Match" : "MISMATCH";
+            else if (seenPhones.includes(want)) out["Phone Match"] = "Match";
+            // OCR routinely clips the trailing digits of a number. A prefix of the
+            // consignee's number is evidence of the right person, so it must not be
+            // reported as a mismatch — that would accuse the courier on an artefact.
+            else if (seenPhones.some(p => p.length >= 7 && (want.startsWith(p) || p.startsWith(want))))
+                out["Phone Match"] = "Partial match";
+            else out["Phone Match"] = "MISMATCH";
 
             return out;
         }
