@@ -55,7 +55,11 @@ A web-based tool designed to parse customer survey data (exported from Excel/CSV
    SHIPSY_API_KEY=your_actual_api_key_here
    STARLINKS_API_URL=https://starlinksapi.app/api/v1/shipments/get-list
    STARLINKS_API_KEY=your_actual_starlinks_api_key_here
+   AZURE_CV_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
+   AZURE_CV_KEY=your_azure_computer_vision_key_here
    ```
+   `AZURE_CV_*` powers the **POD Summary** column in Undelivered mode. Without it the
+   rest of the app still works; only POD analysis is skipped.
 
 3. **Start the Development Server**:
    Use Netlify Dev to run both the frontend and the backend function locally.
@@ -75,7 +79,27 @@ This project is configured for **Netlify**.
     - `SHIPSY_API_KEY`
     - `STARLINKS_API_URL` (optional — defaults to `https://starlinksapi.app/api/v1/shipments/get-list`)
     - `STARLINKS_API_KEY`
+    - `AZURE_CV_ENDPOINT` and `AZURE_CV_KEY` (for the POD Summary column)
 4. **Deploy**: Trigger a deployment.
+
+## 🖼️ POD Summary (Undelivered mode)
+
+Each undelivered shipment's proof-of-delivery images are described by Azure AI Vision
+(Image Analysis 4.0, `tags` + `read`) and written into the **POD Summary** column, next
+to `NDR Reason`, so the two can be compared by eye.
+
+The summary is assembled deterministically from the Azure response — **nothing judges
+whether the POD supports the NDR reason**; that call is left to the reviewer. Chat
+screenshots are transcribed with speaker labels (chat apps right-align the phone owner's
+own messages, so right-aligned text is the courier), Arabic is rebuilt right-to-left and
+carried through untranslated, and parcel photos are described by their scene tags.
+
+Notes:
+- Azure's free tier allows 20 requests/minute; the client self-limits to 15.
+- At most 4 images per shipment are analyzed.
+- Some POD URLs return HTTP 403 from S3; those are reported as unreachable rather than
+  silently dropped.
+- The cell is multi-line. Enable **Wrap Text** on the column in Excel to read it laid out.
 
 ## 📝 Usage Guide
 

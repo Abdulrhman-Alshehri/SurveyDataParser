@@ -651,7 +651,7 @@
         ];
 
         const COLS_UNDELIVERED = [
-            "Date", "Time", "Consignee Phone", "Shipment Number", "NDR Reason", "Status",
+            "Date", "Time", "Consignee Phone", "Shipment Number", "NDR Reason", "POD Summary", "Status",
             "Customer Name",
             "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code",
             "Job Done Name"
@@ -1000,6 +1000,113 @@
 
 
 
+        // --- POD (Proof of Delivery) Image Analysis ---
+        // Each POD image is described by Azure AI Vision via the analyze-pod function.
+        // Nothing here judges the image: the summary lands next to "NDR Reason" so the
+        // operator can compare the two by eye.
+
+        // A courier occasionally attaches several shots. Cap the fan-out so one unusual
+        // shipment cannot burn a large slice of the monthly Azure quota.
+        const POD_MAX_IMAGES = 4;
+
+        // Azure's free tier allows 20 requests/minute; stay under it with headroom.
+        const POD_RATE = { max: 15, windowMs: 60000, hits: [] };
+
+        async function podThrottle() {
+            while (true) {
+                const now = Date.now();
+                POD_RATE.hits = POD_RATE.hits.filter(t => now - t < POD_RATE.windowMs);
+                if (POD_RATE.hits.length < POD_RATE.max) {
+                    POD_RATE.hits.push(now);
+                    return;
+                }
+                const waitMs = POD_RATE.windowMs - (now - POD_RATE.hits[0]) + 50;
+                await new Promise(r => setTimeout(r, waitMs));
+            }
+        }
+
+        // Gathers every distinct POD image URL the tracking response exposes.
+        function collectPodUrls(apiResp) {
+            const urls = [];
+            const push = u => {
+                if (typeof u === 'string' && /^https:\/\//.test(u) && !urls.includes(u)) urls.push(u);
+            };
+
+            ["poc_image_list", "pop_image_list"].forEach(key => {
+                (apiResp[key] || []).forEach(entry => push(entry && entry.url));
+            });
+
+            (apiResp.events || []).forEach(ev => {
+                // proof_image_list arrives JSON-encoded as a string, not as an array.
+                let raw = ev.proof_image_list;
+                if (typeof raw === 'string') {
+                    try { raw = JSON.parse(raw); } catch (e) { raw = null; }
+                }
+                (Array.isArray(raw) ? raw : []).forEach(push);
+            });
+
+            // The scalar image fields point at S3 objects that are not publicly readable
+            // (403 on every shipment tested), so they are only worth spending a request
+            // on when no list field carried anything at all.
+            if (!urls.length) {
+                const scalars = ["poc_image", "pop_image", "poa_image"];
+                scalars.forEach(k => push(apiResp[k]));
+                (apiResp.events || []).forEach(ev => scalars.forEach(k => push(ev[k])));
+            }
+
+            return urls.slice(0, POD_MAX_IMAGES);
+        }
+
+        async function analyzePodImage(url) {
+            // Two passes at most: one retry after a rate-limit backoff.
+            for (let attempt = 0; attempt < 2; attempt++) {
+                await podThrottle();
+                try {
+                    const res = await fetch(`/.netlify/functions/analyze-pod?url=${encodeURIComponent(url)}`);
+                    if (res.status === 429) {
+                        const body = await res.json().catch(() => ({}));
+                        await new Promise(r => setTimeout(r, (Number(body.retryAfter) || 60) * 1000));
+                        continue;
+                    }
+                    if (!res.ok) {
+                        console.warn(`POD analysis failed (${res.status}) for ${url}`);
+                        return null;
+                    }
+                    return await res.json();
+                } catch (e) {
+                    console.warn(`POD analysis exception for ${url}:`, e);
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        // Builds the "POD Summary" cell for one shipment.
+        async function buildPodSummary(urls) {
+            if (!urls.length) return "No POD attached";
+
+            const parts = [];
+            let unreachable = 0, failed = 0;
+
+            for (let i = 0; i < urls.length; i++) {
+                const result = await analyzePodImage(urls[i]);
+                if (!result || !result.ok) {
+                    if (result && result.unreachable) unreachable++; else failed++;
+                    continue;
+                }
+                parts.push(urls.length > 1
+                    ? `Image ${i + 1} of ${urls.length} — ${result.summary}`
+                    : result.summary);
+            }
+
+            const notes = [];
+            if (unreachable) notes.push(`${unreachable} image(s) unreachable (403)`);
+            if (failed) notes.push(`${failed} image(s) could not be analyzed`);
+
+            if (!parts.length) return notes.length ? notes.join("; ") : "No POD attached";
+            return parts.concat(notes).join("\n");
+        }
+
         async function fetchApiData() {
             if (parsedData.length === 0) {
                 showLoading(false);
@@ -1009,6 +1116,9 @@
             showLoading(true, `Fetching API Data (0/${parsedData.length})...`);
 
             const batchSize = 20;
+            // Shipments whose POD images still need describing. Filled during the
+            // tracking pass, drained afterwards so the Azure calls stay rate-limited.
+            const podQueue = [];
             try {
                 for (let i = 0; i < parsedData.length; i += batchSize) {
                     const batch = parsedData.slice(i, i + batchSize);
@@ -1038,6 +1148,12 @@
                                     if (!item.hub_code && apiResp.hub_code) {
                                         item.hub_code = apiResp.hub_code;
                                     }
+
+                                    // POD images are only surfaced in Undelivered mode,
+                                    // where the summary is compared against "NDR Reason".
+                                    if (currentMode === 'undelivered') {
+                                        podQueue.push({ item, urls: collectPodUrls(apiResp) });
+                                    }
                                 } else {
                                     // No API data, default courier_partner to SELF
                                     item.courier_partner = 'SELF';
@@ -1061,6 +1177,20 @@
                 return;
             }
 
+            // Describe POD images one at a time so the rate limiter can pace them.
+            // A failure here must not discard the tracking data already collected.
+            if (podQueue.length) {
+                for (let i = 0; i < podQueue.length; i++) {
+                    showLoading(true, `Analyzing POD images (${i + 1}/${podQueue.length})...`);
+                    try {
+                        podQueue[i].item["POD Summary"] = await buildPodSummary(podQueue[i].urls);
+                    } catch (e) {
+                        console.warn("POD summary failed:", e);
+                        podQueue[i].item["POD Summary"] = "Analysis failed";
+                    }
+                }
+            }
+
             showLoading(false);
 
             renderPreview();
@@ -1075,7 +1205,22 @@
             let theadHtml = "<tr>"; cols.forEach(col => { theadHtml += `<th>${col}</th>`; }); theadHtml += "</tr>";
             previewTable.querySelector('thead').innerHTML = theadHtml;
             let tbodyHtml = "";
-            parsedData.slice(0, 5).forEach(row => { tbodyHtml += "<tr>"; cols.forEach(col => { tbodyHtml += `<td>${row[col] != null ? row[col] : ""}</td>`; }); tbodyHtml += "</tr>"; });
+            const escapeHtml = s => String(s)
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            parsedData.slice(0, 5).forEach(row => {
+                tbodyHtml += "<tr>";
+                cols.forEach(col => {
+                    const raw = row[col] != null ? row[col] : "";
+                    if (col === "POD Summary") {
+                        // OCR text is untrusted and multi-line: escape it, and keep the
+                        // line breaks that make the conversation readable.
+                        tbodyHtml += `<td style="white-space:pre-line;min-width:320px;text-align:left">${escapeHtml(raw)}</td>`;
+                    } else {
+                        tbodyHtml += `<td>${raw}</td>`;
+                    }
+                });
+                tbodyHtml += "</tr>";
+            });
             previewTable.querySelector('tbody').innerHTML = tbodyHtml;
 
             const countEl = document.getElementById('filterCount');
@@ -1110,7 +1255,16 @@
                 return o;
             });
             const ws = XLSX.utils.json_to_sheet(projected, { header: cols });
-            ws['!cols'] = cols.map(() => ({ wch: 20 }));
+            // The POD summary is a multi-line transcript, so give it room. Excel still
+            // needs "Wrap Text" switched on to show the line breaks laid out.
+            ws['!cols'] = cols.map(c => ({ wch: c === "POD Summary" ? 70 : 20 }));
+            const podIdx = cols.indexOf("POD Summary");
+            if (podIdx !== -1) {
+                for (let r = 1; r <= projected.length; r++) {
+                    const ref = XLSX.utils.encode_cell({ c: podIdx, r });
+                    if (ws[ref]) ws[ref].s = { alignment: { wrapText: true, vertical: "top" } };
+                }
+            }
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "Parsed Data");
             XLSX.writeFile(wb, `Parsed_${currentMode === 'all' ? 'All' : currentMode}_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.xlsx`);
