@@ -29,19 +29,110 @@ const STATUS_BAR_FRAC = 0.04;
 // A tag confidence high enough to trust the screenshot/photo classification.
 const SCREENSHOT_CONF_MIN = 0.60;
 
+// Wrapped lines inside one chat bubble sit closer together than separate messages.
+// Expressed as a multiple of the median line height.
+const BUBBLE_GAP_RATIO = 0.9;
+
+// OCR frequently clips the trailing digits of a phone number, so short candidates are
+// still worth keeping — the caller decides whether a partial counts as a match. The
+// Saudi prefix requirement is what keeps shipment numbers out (S0007053683 normalises
+// to 7053683, which is the right length but the wrong shape).
+const PHONE_MIN_DIGITS = 7;
+const PHONE_MAX_DIGITS = 15;
+const SAUDI_PHONE_START = /^(966|5)/;
+
 // Arabic + Arabic Supplement. Built from an escaped string so the file's encoding
 // cannot corrupt the code-point range.
 const ARABIC = new RegExp('[\\u0600-\\u06FF\\u0750-\\u077F]');
-const TIMESTAMP = /^\d{1,2}:\d{2}$/;
-const PHONE = /\+?\d[\d\s-]{7,}\d/;
+// Arabic *letters* only. The full Arabic block contains the ٠-٩ digits, so matching
+// it wholesale would treat a bare Arabic number as though it were words.
+const HAS_LETTERS = new RegExp('[A-Za-z\\u0620-\\u064A\\u0671-\\u06D3]');
+const ARABIC_INDIC = new RegExp('[\\u0660-\\u0669]', 'g');
+const EXT_ARABIC_INDIC = new RegExp('[\\u06F0-\\u06F9]', 'g');
 
-// Chat-UI furniture and clock fragments that survive the confidence filter.
-// "م" and "ص" are the Arabic PM/AM markers and leak out of localized timestamps.
+// Automated carrier notifications. They appear verbatim in nearly every POD and say
+// nothing about whether the delivery actually failed.
+const BOILERPLATE = [
+    /you can track your/i,
+    /shipment here/i,
+    /starlinks-me\.com/i,
+    /^tracking$/i,
+    /thank you for/i,
+    /choosing starlinks/i,
+    /keep the payment/i,
+    /ready for collection/i,
+    /if applicable/i,
+    /please confirm your regist/i,
+    /share your saudi/i,
+    /address, or share/i,
+    /\?search=/i,
+    /\/tracking/i,
+    /^send address/i,
+    /معك شركة ستارلينكس/,
+    /سيتم اليوم استلام الشحنة/,
+    /المرتجعة الخاصة بك/,
+    /عنوان الاستلام المسجل/,
+    /^ارسل العنوان$/
+];
+
+// Chat-app furniture: input placeholders, sender labels, expanders, tombstones.
+const UI_CHROME = [
+    /^الرسالة$/,
+    /^أنت$/,
+    /قراءة المزيد/,
+    /لقد حذفت/,
+    /يستمر التطبيق/,
+    /معلومات عن التطبيق/,
+    /^إغلاق/,
+    /^edited$/i
+];
+
+// Call activity is not conversation, but it is evidence: repeated missed calls speak
+// directly to a "NO RESPONSE" claim. Counted separately rather than inlined.
+const CALL_EVENTS = [
+    /مكالمة صوتية فائتة/,
+    /مكالمة فيديو فائتة/,
+    /مكالمة صوتية/,
+    /مكالمة فيديو/,
+    /فشل الاتصال/,
+    /إعادة المحاولة/,
+    /اضغط لمعاودة الاتصال/,
+    /missed (voice|video) call/i
+];
+
 const NOISE_WORDS = new Set([
     'edited', 'pm', 'am', 'v', '//', '...', 'message', 'volte', 'lte',
     'م', // Arabic "م" = PM
     'ص'  // Arabic "ص" = AM
 ]);
+
+// Arabic-Indic numerals render as ٠-٩, which JavaScript's \d does not match. Every
+// numeric test below runs on the ASCII form so Arabic clocks are recognised too.
+function toAsciiDigits(s) {
+    return String(s)
+        .replace(ARABIC_INDIC, d => String(d.charCodeAt(0) - 0x0660))
+        .replace(EXT_ARABIC_INDIC, d => String(d.charCodeAt(0) - 0x06F0));
+}
+
+function digitsOnly(s) {
+    return toAsciiDigits(s).replace(/\D/g, '');
+}
+
+// True for clock readings in either numeral system, with or without a trailing
+// day marker ("11:44 /7") or meridiem.
+function isTimestamp(text) {
+    const t = toAsciiDigits(text).replace(/\s*\/\s*\d+\s*$/, '').trim();
+    return /^\d{1,2}\s*[:.]\s*\d{1,2}$/.test(t);
+}
+
+// Fragments with no letters in any script carry nothing a reviewer can act on.
+function isContentless(text) {
+    return !HAS_LETTERS.test(text);
+}
+
+function matchesAny(patterns, text) {
+    return patterns.some(re => re.test(text));
+}
 
 function polyBox(poly) {
     const xs = poly.map(p => p.x);
@@ -62,7 +153,7 @@ function cleanLine(line, imgHeight) {
         const t = (w.text || '').trim();
         if (!t) return false;
         if ((w.confidence || 0) < WORD_CONF_MIN) return false;
-        if (TIMESTAMP.test(t)) return false;
+        if (isTimestamp(t)) return false;
         if (NOISE_WORDS.has(t.toLowerCase())) return false;
         // Stray single Latin glyphs are icon misreads (O, C, A, e).
         if (t.length <= 1 && !ARABIC.test(t)) return false;
@@ -80,7 +171,32 @@ function cleanLine(line, imgHeight) {
 
     const text = kept.map(w => w.text).join(' ').trim();
     if (!text) return null;
-    return { text, isArabic, x0: box.x0, y0: box.y0, x1: box.x1 };
+    return { text, isArabic, x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 };
+}
+
+// Merges wrapped fragments of the same chat bubble back into one message. Without
+// this a single sentence arrives as three lines and can be attributed to both sides.
+function mergeBubbles(lines, imgWidth) {
+    if (!lines.length) return [];
+
+    const heights = lines.map(l => l.y1 - l.y0).sort((a, b) => a - b);
+    const medianHeight = heights[Math.floor(heights.length / 2)] || 1;
+    const maxGap = medianHeight * BUBBLE_GAP_RATIO;
+
+    const sideOf = l => (imgWidth && (l.x0 + l.x1) / 2 > imgWidth / 2) ? 'courier' : 'customer';
+
+    const bubbles = [];
+    lines.forEach(line => {
+        const side = sideOf(line);
+        const prev = bubbles[bubbles.length - 1];
+        if (prev && prev.side === side && (line.y0 - prev.y1) <= maxGap) {
+            prev.text += ' ' + line.text;
+            prev.y1 = line.y1;
+            return;
+        }
+        bubbles.push({ text: line.text, side, y0: line.y0, y1: line.y1, isArabic: line.isArabic });
+    });
+    return bubbles;
 }
 
 function summarize(azure) {
@@ -101,49 +217,74 @@ function summarize(azure) {
     });
     lines.sort((a, b) => a.y0 - b.y0); // top to bottom
 
+    const bubbles = mergeBubbles(lines, imgWidth);
+
     const phones = [];
-    const body = [];
+    const kept = [];
     const seen = new Set();
-    lines.forEach(l => {
-        const m = l.text.match(PHONE);
-        if (m && !l.isArabic) {
-            const p = m[0].replace(/\s+/g, ' ').trim();
-            if (!phones.includes(p)) phones.push(p);
-            return;
+    let callEvents = 0;
+
+    bubbles.forEach(b => {
+        const text = b.text.trim();
+
+        // Phone numbers are pulled out rather than shown as speech. Anything too short
+        // is a truncated read or a shipment number, not a contact.
+        const digits = digitsOnly(text);
+        if (!ARABIC.test(text) && /^[+\d\s()-]+$/.test(text)) {
+            const trimmed = digits.replace(/^0+/, '');
+            if (trimmed.length >= PHONE_MIN_DIGITS && trimmed.length <= PHONE_MAX_DIGITS
+                && SAUDI_PHONE_START.test(trimmed)) {
+                if (!phones.includes(trimmed)) phones.push(trimmed);
+            }
+            return; // numeric-only bubble: never conversation
         }
-        // WhatsApp renders a quoted reply above the response, duplicating the text.
-        if (seen.has(l.text)) return;
-        seen.add(l.text);
-        body.push(l);
+
+        if (matchesAny(CALL_EVENTS, text)) { callEvents++; return; }
+        if (matchesAny(UI_CHROME, text)) return;
+        if (matchesAny(BOILERPLATE, text)) return;
+        if (isTimestamp(text) || isContentless(text)) return;
+        if (seen.has(text)) return; // quoted replies repeat the original
+        seen.add(text);
+        kept.push(b);
     });
 
+    // A phone number can also appear inline inside a normal message.
+    kept.forEach(b => {
+        const m = toAsciiDigits(b.text).match(/\+?\d[\d\s-]{7,}\d/);
+        if (!m) return;
+        const trimmed = m[0].replace(/\D/g, '').replace(/^0+/, '');
+        if (trimmed.length >= PHONE_MIN_DIGITS && trimmed.length <= PHONE_MAX_DIGITS
+            && SAUDI_PHONE_START.test(trimmed) && !phones.includes(trimmed)) phones.push(trimmed);
+    });
+
+    const customerLines = kept.filter(b => b.side === 'customer').map(b => b.text);
     const out = [];
-    const customerLines = [];
     let scene = '';
 
     if (isScreenshot) {
-        out.push('Chat screenshot. Conversation (top to bottom):');
-        body.forEach(l => {
-            // Chat apps right-align the phone owner's own messages. The POD is shot on
-            // the courier's handset, so right-aligned text is the courier speaking.
-            const centre = (l.x0 + l.x1) / 2;
-            const who = imgWidth && centre > imgWidth / 2 ? 'courier' : 'customer';
-            if (who === 'customer') customerLines.push(l.text);
-            out.push(`  [${who}] ${l.text}`);
-        });
-        if (!body.length) out.push('  (no legible text)');
+        if (kept.length) {
+            out.push('Chat screenshot. Conversation (top to bottom):');
+            kept.forEach(b => out.push(`  [${b.side}] ${b.text}`));
+        } else {
+            out.push('Chat screenshot with no readable conversation.');
+        }
     } else {
         scene = Object.keys(tags)
             .filter(n => tags[n] >= SCREENSHOT_CONF_MIN && n !== 'text')
             .sort((a, b) => tags[b] - tags[a])
             .join(', ');
         out.push(`Photo (${scene || 'no clear scene'}).`);
-        if (body.length) {
+        if (kept.length) {
             out.push('Text found:');
-            body.forEach(l => out.push(`  ${l.text}`));
+            kept.forEach(b => out.push(`  ${b.text}`));
         } else {
             out.push('No legible text.');
         }
+    }
+
+    // Repeated call attempts are direct evidence for or against a "no response" claim.
+    if (callEvents) {
+        out.push(`Call activity: ${callEvents} missed or failed call event(s).`);
     }
     if (phones.length) out.push('Contact seen: ' + phones.join('; '));
 
@@ -154,7 +295,9 @@ function summarize(azure) {
         // The customer's closing line is usually what settles the row.
         lastCustomerLine: customerLines.length ? customerLines[customerLines.length - 1] : '',
         scene,
-        phones
+        phones,
+        callEvents,
+        readable: kept.length
     };
 }
 
