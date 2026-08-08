@@ -118,6 +118,9 @@ function summarize(azure) {
     });
 
     const out = [];
+    const customerLines = [];
+    let scene = '';
+
     if (isScreenshot) {
         out.push('Chat screenshot. Conversation (top to bottom):');
         body.forEach(l => {
@@ -125,11 +128,12 @@ function summarize(azure) {
             // the courier's handset, so right-aligned text is the courier speaking.
             const centre = (l.x0 + l.x1) / 2;
             const who = imgWidth && centre > imgWidth / 2 ? 'courier' : 'customer';
+            if (who === 'customer') customerLines.push(l.text);
             out.push(`  [${who}] ${l.text}`);
         });
         if (!body.length) out.push('  (no legible text)');
     } else {
-        const scene = Object.keys(tags)
+        scene = Object.keys(tags)
             .filter(n => tags[n] >= SCREENSHOT_CONF_MIN && n !== 'text')
             .sort((a, b) => tags[b] - tags[a])
             .join(', ');
@@ -143,7 +147,15 @@ function summarize(azure) {
     }
     if (phones.length) out.push('Contact seen: ' + phones.join('; '));
 
-    return { summary: out.join('\n'), kind: isScreenshot ? 'screenshot' : 'photo' };
+    return {
+        summary: out.join('\n'),
+        kind: isScreenshot ? 'screenshot' : 'photo',
+        customerLines,
+        // The customer's closing line is usually what settles the row.
+        lastCustomerLine: customerLines.length ? customerLines[customerLines.length - 1] : '',
+        scene,
+        phones
+    };
 }
 
 function postToAzure(endpoint, key, imageUrl) {
@@ -232,11 +244,11 @@ exports.handler = async function (event) {
         }
 
         const azure = JSON.parse(res.body);
-        const { summary, kind } = summarize(azure);
+        const result = summarize(azure);
         return {
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ok: true, kind, summary })
+            body: JSON.stringify(Object.assign({ ok: true }, result))
         };
     } catch (err) {
         console.error('Unhandled Function Error:', err);
