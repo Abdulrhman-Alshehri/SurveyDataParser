@@ -57,9 +57,15 @@ A web-based tool designed to parse customer survey data (exported from Excel/CSV
    STARLINKS_API_KEY=your_actual_starlinks_api_key_here
    AZURE_CV_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
    AZURE_CV_KEY=your_azure_computer_vision_key_here
+   AZURE_LLM_ENDPOINT=https://your-resource.services.ai.azure.com/openai/v1
+   AZURE_LLM_KEY=your_azure_openai_key_here
+   AZURE_LLM_DEPLOYMENT=gpt-5.4-nano
    ```
-   `AZURE_CV_*` powers the **POD Summary** column in Undelivered mode. Without it the
-   rest of the app still works; only POD analysis is skipped.
+   `AZURE_CV_*` powers the POD columns in Undelivered mode. Without it the rest of the
+   app still works; only POD analysis is skipped.
+
+   `AZURE_LLM_*` is **optional** and adds the `POD AI Summary` and `POD Signal` columns.
+   Leave it unset and every other POD column behaves exactly as before.
 
 3. **Start the Development Server**:
    Use Netlify Dev to run both the frontend and the backend function locally.
@@ -96,7 +102,9 @@ Each undelivered shipment's proof-of-delivery images are described by Azure AI V
 | `Customer Said` | `بس أنا ابي ارجع… / لا / الغي الطلب` | Customer-side lines only, courier chatter dropped. |
 | `POD Images` | `1` | How many images back the summary. |
 | `Attempts` | `1` | Delivery attempt count; repeats with the same NDR reason are a pattern. |
-| `POD Full Details` | *(multi-line)* | The complete transcript. Parked at the far right — collapse it until a short column looks wrong. |
+| `POD AI Summary` | `Courier said they were outside and delivery was completed` | One readable English line, written by a language model from the transcript. Optional — requires `AZURE_LLM_*`. |
+| `POD Signal` | `CONTRADICTS` | Advisory triage hint: `SUPPORTS` / `CONTRADICTS` / `UNCLEAR`. Sort by it to surface rows worth reviewing first. **Not a verdict.** |
+| `POD Full Details` | *(multi-line)* | The complete transcript — the auditable record. Collapse it until a short column looks wrong. |
 
 The summary is assembled deterministically from the Azure response — **nothing judges
 whether the POD supports the NDR reason**; that call is left to the reviewer. Chat
@@ -111,6 +119,20 @@ Notes:
   silently dropped.
 - `POD Full Details` is multi-line. Enable **Wrap Text** on that column in Excel to read
   it laid out.
+
+### On the AI columns
+
+The language model **never sees the POD images**. It reads only the transcript that Azure
+AI Vision extracted by rule. This split is deliberate: asked to read a POD image directly,
+the model described a scene that was not present and attributed a fabricated quote to a
+customer. Pixels stay with the vision service; the model only ever summarises text that was
+extracted deterministically.
+
+`POD Signal` is a triage aid, not a finding. On a trial across 7 real shipments it flagged
+3 as `CONTRADICTS`, but one borderline row changed verdict between two prompt revisions on
+identical input. Sort by it to decide what to look at first — then look. `Phone Match` and
+every other fraud signal stay rule-based, and `POD Full Details` remains the auditable
+record if a courier disputes a finding.
 
 ## 📝 Usage Guide
 
