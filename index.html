@@ -654,7 +654,7 @@
         // judged without scrolling: short signals first, then the full transcript.
         const COLS_UNDELIVERED = [
             "Date", "Time", "Consignee Phone", "Shipment Number", "NDR Reason",
-            "POD Short Summary", "POD Type", "POD Full Details",
+            "POD Short Summary", "POD AI Summary", "POD Signal", "POD Type", "POD Full Details",
             "Phone Match", "Customer Said", "POD Images", "Attempts",
             "Status", "COD", "Customer Name",
             "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code",
@@ -1063,8 +1063,32 @@
         // Long cells are unreadable at a glance, so the short columns are capped.
         const POD_SHORT_MAX = 90;
 
-        // Columns carrying OCR text, which must be HTML-escaped before preview.
-        const POD_TEXT_COLS = new Set(["POD Full Details", "POD Short Summary", "Customer Said"]);
+        // Columns carrying OCR or model text, which must be HTML-escaped before preview.
+        const POD_TEXT_COLS = new Set([
+            "POD Full Details", "POD Short Summary", "Customer Said", "POD AI Summary"
+        ]);
+
+        // Optional second pass: hand the deterministic transcript to a language model
+        // for a readable one-line summary and an advisory signal. The model never sees
+        // the images — asked to read one directly it fabricated a customer quote, so
+        // only rule-extracted text is ever sent. Returns null when unavailable, and the
+        // rule-based columns stand on their own in that case.
+        async function summarizePodWithAI(ndrReason, transcript) {
+            if (!transcript || transcript === "No POD attached") return null;
+            try {
+                const res = await fetch("/.netlify/functions/summarize-pod", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ndr: ndrReason || "", transcript })
+                });
+                if (!res.ok) return null;
+                const data = await res.json();
+                return data && data.ok ? data : null;
+            } catch (e) {
+                console.warn("AI POD summary unavailable:", e);
+                return null;
+            }
+        }
 
         function truncatePod(s, n) {
             s = String(s == null ? "" : s);
@@ -1223,8 +1247,18 @@
                 for (let i = 0; i < podQueue.length; i++) {
                     showLoading(true, `Analyzing POD images (${i + 1}/${podQueue.length})...`);
                     try {
+                        const item = podQueue[i].item;
                         const fields = await buildPodFields(podQueue[i].urls, podQueue[i].consigneePhone);
-                        Object.assign(podQueue[i].item, fields);
+                        Object.assign(item, fields);
+
+                        // Both summaries are kept side by side. The signal is a triage
+                        // hint for sorting the review queue, not a verdict, and it has
+                        // been observed to drift on borderline rows.
+                        const ai = await summarizePodWithAI(item["NDR Reason"], fields["POD Full Details"]);
+                        if (ai) {
+                            item["POD AI Summary"] = ai.summary;
+                            item["POD Signal"] = ai.signal;
+                        }
                     } catch (e) {
                         console.warn("POD analysis failed:", e);
                         podQueue[i].item["POD Full Details"] = "Analysis failed";
@@ -1301,7 +1335,10 @@
             const ws = XLSX.utils.json_to_sheet(projected, { header: cols });
             // "POD Full Details" is a multi-line transcript, so give it room. Excel
             // still needs "Wrap Text" switched on to lay the line breaks out.
-            const POD_WIDTHS = { "POD Full Details": 70, "POD Short Summary": 32, "Customer Said": 40 };
+            const POD_WIDTHS = {
+                "POD Full Details": 70, "POD Short Summary": 32,
+                "POD AI Summary": 55, "POD Signal": 13, "Customer Said": 40
+            };
             ws['!cols'] = cols.map(c => ({ wch: POD_WIDTHS[c] || 20 }));
             const podIdx = cols.indexOf("POD Full Details");
             if (podIdx !== -1) {
