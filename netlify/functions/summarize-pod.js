@@ -1,4 +1,5 @@
 const https = require('https');
+const crypto = require('crypto');
 
 // Turns an already-extracted POD transcript into a one-line English summary plus an
 // advisory SUPPORTS/CONTRADICTS/UNCLEAR signal, using an Azure-hosted OpenAI model.
@@ -94,6 +95,36 @@ exports.handler = async function (event) {
                 statusCode: 200,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ok: false, reason: 'not_configured' })
+            };
+        }
+
+        // ?diag=1 reports whether the configured credentials are the ones expected,
+        // without disclosing them. Netlify marks these variables secret, so their
+        // stored values cannot be read back from the UI, which makes a mistyped or
+        // truncated paste invisible and impossible to confirm by inspection.
+        // A length and a truncated SHA-256 are enough to compare against a known-good
+        // value and reveal nothing about the credential itself.
+        if ((event.queryStringParameters || {}).diag === '1') {
+            const fingerprint = v => v
+                ? { len: v.length, sha8: crypto.createHash('sha256').update(v).digest('hex').slice(0, 8) }
+                : null;
+            let host = null, path = null;
+            if (ENDPOINT) {
+                try {
+                    const u = new URL(normalizeEndpoint(ENDPOINT));
+                    host = u.host; path = u.pathname;
+                } catch (e) { host = 'unparseable'; }
+            }
+            return {
+                statusCode: 200,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    configured: Boolean(KEY && ENDPOINT && DEPLOYMENT),
+                    endpointHost: host,
+                    endpointPath: path,
+                    key: fingerprint(KEY),
+                    deployment: fingerprint(DEPLOYMENT)
+                })
             };
         }
 
