@@ -48,6 +48,15 @@ const RESPONSE_SCHEMA = {
     additionalProperties: false
 };
 
+// Azure exposes the OpenAI-compatible API under /openai/v1 on the resource host, but
+// the portal shows the bare host in several places. Accept either form: posting to
+// the host without the suffix returns a bare 404 that looks identical to a bad
+// deployment name, which is needlessly hard to diagnose.
+function normalizeEndpoint(raw) {
+    const base = String(raw).trim().replace(/\/+$/, '');
+    return /\/openai\/v\d+$/i.test(base) ? base : base + '/openai/v1';
+}
+
 function postJson(url, headers, payload) {
     return new Promise((resolve) => {
         const body = JSON.stringify(payload);
@@ -105,7 +114,7 @@ exports.handler = async function (event) {
             };
         }
 
-        const url = `${ENDPOINT.replace(/\/+$/, '')}/chat/completions`;
+        const url = `${normalizeEndpoint(ENDPOINT)}/chat/completions`;
         const res = await postJson(url, { 'Authorization': `Bearer ${KEY}` }, {
             model: DEPLOYMENT,
             max_completion_tokens: 300,
@@ -120,11 +129,22 @@ exports.handler = async function (event) {
         });
 
         if (res.statusCode !== 200) {
+            // Surface the upstream message. A 404 alone cannot distinguish a wrong URL
+            // from a wrong deployment name, and Azure's error body names which it is.
+            let detail = res.error || '';
+            try {
+                const errBody = JSON.parse(res.body);
+                detail = (errBody.error && (errBody.error.code || errBody.error.message)) || detail;
+            } catch (e) { detail = detail || String(res.body).slice(0, 120); }
             console.warn(`LLM summarise failed (${res.statusCode}): ${String(res.body).slice(0, 200)}`);
             return {
                 statusCode: 200,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ok: false, reason: `upstream_${res.statusCode}` })
+                body: JSON.stringify({
+                    ok: false,
+                    reason: `upstream_${res.statusCode}`,
+                    detail: String(detail).slice(0, 160)
+                })
             };
         }
 
