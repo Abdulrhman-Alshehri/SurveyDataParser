@@ -58,8 +58,12 @@ A web-based tool designed to parse customer survey data (exported from Excel/CSV
    AZURE_CV_KEY=your_azure_computer_vision_key_here
    AZURE_LLM_ENDPOINT=https://your-resource.services.ai.azure.com/openai/v1
    AZURE_LLM_KEY=your_azure_openai_key_here
-   AZURE_LLM_DEPLOYMENT=gpt-5.4-nano
+   AZURE_LLM_DEPLOYMENT=your_model_deployment_name
    ```
+   > Keep real values out of this file and out of the repo. The publish directory is the
+   > repo root, so every committed file is served publicly, and Netlify's secret scanning
+   > fails the build if it finds the value of any configured environment variable — model
+   > deployment names included.
    `AZURE_CV_*` powers the POD columns in Undelivered mode. Without it the rest of the
    app still works; only POD analysis is skipped.
 
