@@ -1251,10 +1251,19 @@
                         const fields = await buildPodFields(podQueue[i].urls, podQueue[i].consigneePhone);
                         Object.assign(item, fields);
 
+                        // Only summarise when an image was actually read. Handing the
+                        // model a failure notice makes it write a fluent sentence about
+                        // having no evidence, and emit a signal of UNCLEAR — which reads
+                        // like a judgement on the POD rather than a broken pipeline.
+                        const analysed = fields["POD Type"] === "Chat screenshot"
+                            || fields["POD Type"] === "Photo";
+
                         // Both summaries are kept side by side. The signal is a triage
                         // hint for sorting the review queue, not a verdict, and it has
                         // been observed to drift on borderline rows.
-                        const ai = await summarizePodWithAI(item["NDR Reason"], fields["POD Full Details"]);
+                        const ai = analysed
+                            ? await summarizePodWithAI(item["NDR Reason"], fields["POD Full Details"])
+                            : null;
                         if (ai) {
                             item["POD AI Summary"] = ai.summary;
                             item["POD Signal"] = ai.signal;
