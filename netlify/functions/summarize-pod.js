@@ -12,7 +12,6 @@ const https = require('https');
 // The signal is a triage aid for sorting a review queue, never a verdict. Phone
 // matching and every other fraud signal remain rule-based elsewhere.
 
-const DEFAULT_DEPLOYMENT = 'gpt-5.4-nano';
 const MAX_TRANSCRIPT_CHARS = 6000;
 
 // The transcript is OCR of screenshots a courier supplied, so it is attacker-
@@ -73,11 +72,15 @@ exports.handler = async function (event) {
     try {
         const ENDPOINT = process.env.AZURE_LLM_ENDPOINT;
         const KEY = process.env.AZURE_LLM_KEY;
-        const DEPLOYMENT = process.env.AZURE_LLM_DEPLOYMENT || DEFAULT_DEPLOYMENT;
+        // Deliberately has no hardcoded fallback. The publish directory is the repo
+        // root, so every committed file is publicly served, and a literal deployment
+        // name here would both leak the model in use and trip Netlify's secret scanner
+        // (which matches the value of every configured environment variable).
+        const DEPLOYMENT = process.env.AZURE_LLM_DEPLOYMENT;
 
         // Not configured is a normal state, not an error: the caller keeps the
         // rule-based summary and the report is unaffected.
-        if (!KEY || !ENDPOINT) {
+        if (!KEY || !ENDPOINT || !DEPLOYMENT) {
             return {
                 statusCode: 200,
                 headers: { 'Content-Type': 'application/json' },
