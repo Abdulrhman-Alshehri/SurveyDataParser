@@ -36,16 +36,30 @@ const SYSTEM_PROMPT = [
     'Lead with the most decisive evidence for or against the NDR reason.',
     '',
     'Then judge whether the evidence SUPPORTS or CONTRADICTS the stated NDR reason, or',
-    'is UNCLEAR. This is advisory only - a human makes the final decision.'
+    'is UNCLEAR. This is advisory only - a human makes the final decision.',
+    '',
+    "Also state whose messages that judgement rests on:",
+    "CONSIGNEE - the customer's own messages carry the evidence (for example an NDR",
+    "  of no response, where the customer visibly replied).",
+    "COURIER - the courier's own messages carry it (for example an NDR of rescheduled,",
+    "  where the courier wrote that delivery was completed).",
+    "BOTH - both sides contribute.",
+    "NONE - the transcript settles nothing either way, OR the judgement rests only",
+    "  on call activity. Missed and failed calls are not messages from either side,",
+    "  so they are never CONSIGNEE, COURIER or BOTH."
 ].join('\n');
 
 const RESPONSE_SCHEMA = {
     type: 'object',
     properties: {
         summary: { type: 'string' },
-        signal: { type: 'string', enum: ['SUPPORTS', 'CONTRADICTS', 'UNCLEAR'] }
+        signal: { type: 'string', enum: ['SUPPORTS', 'CONTRADICTS', 'UNCLEAR'] },
+        // Which party's messages the signal rests on. A courier-side contradiction
+        // (the courier's own words undercut the reason they filed) is stronger
+        // evidence than a consignee-side one, so the two are worth separating.
+        source: { type: 'string', enum: ['CONSIGNEE', 'COURIER', 'BOTH', 'NONE'] }
     },
-    required: ['summary', 'signal'],
+    required: ['summary', 'signal', 'source'],
     additionalProperties: false
 };
 
@@ -197,7 +211,8 @@ exports.handler = async function (event) {
             body: JSON.stringify({
                 ok: true,
                 summary: String(out.summary || ''),
-                signal: String(out.signal || 'UNCLEAR')
+                signal: String(out.signal || 'UNCLEAR'),
+                source: String(out.source || 'NONE')
             })
         };
     } catch (err) {

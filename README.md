@@ -68,7 +68,8 @@ A web-based tool designed to parse customer survey data (exported from Excel/CSV
    `AZURE_CV_*` powers the POD columns in Undelivered mode. Without it the rest of the
    app still works; only POD analysis is skipped.
 
-   `AZURE_LLM_*` is **optional** and adds the `POD AI Summary` and `POD Signal` columns.
+   `AZURE_LLM_*` is **optional** and adds the `POD AI Summary`, `POD Signal` and
+   `Evidence From` columns.
    Leave it unset and every other POD column behaves exactly as before.
 
 3. **Start the Development Server**:
@@ -100,7 +101,6 @@ Each undelivered shipment's proof-of-delivery images are described by Azure AI V
 
 | Column | Example | What it is |
 |---|---|---|
-| `POD Short Summary` | `الغي الطلب` | The customer's closing line — usually settles the row on its own. For a photo, the scene tags. |
 | `POD Type` | `Chat screenshot` | `Chat screenshot` / `Photo` / `No POD` / `Unreachable`. Filterable. |
 | `Phone Match` | `Match` | Compares any phone number visible in the POD against the consignee's. `MISMATCH` means the courier photographed a conversation with somebody else. |
 | `Customer Said` | `بس أنا ابي ارجع… / لا / الغي الطلب` | Customer-side lines only, courier chatter dropped. |
@@ -108,6 +108,7 @@ Each undelivered shipment's proof-of-delivery images are described by Azure AI V
 | `Attempts` | `1` | Delivery attempt count; repeats with the same NDR reason are a pattern. |
 | `POD AI Summary` | `Courier said they were outside and delivery was completed` | One readable English line, written by a language model from the transcript. Optional — requires `AZURE_LLM_*`. |
 | `POD Signal` | `CONTRADICTS` | Advisory triage hint: `SUPPORTS` / `CONTRADICTS` / `UNCLEAR`. Sort by it to surface rows worth reviewing first. **Not a verdict.** |
+| `Evidence From` | `Courier` | Whose own messages the signal rests on: `Consignee`, `Courier`, `Both`, or blank. A courier-side contradiction — the courier's own words undercutting the reason they filed — is the stronger finding. Call activity alone never counts as either side. |
 | `POD Full Details` | *(multi-line)* | The complete transcript — the auditable record. Collapse it until a short column looks wrong. |
 
 The summary is assembled deterministically from the Azure response — **nothing judges
