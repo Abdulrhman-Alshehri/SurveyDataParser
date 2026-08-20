@@ -654,7 +654,7 @@
         // judged without scrolling: short signals first, then the full transcript.
         const COLS_UNDELIVERED = [
             "Date", "Time", "Consignee Phone", "Shipment Number", "NDR Reason",
-            "POD Short Summary", "POD AI Summary", "POD Signal", "POD Type", "POD Full Details",
+            "POD AI Summary", "POD Signal", "Evidence From", "POD Type", "POD Full Details",
             "Phone Match", "Customer Said", "POD Images", "Attempts",
             "Status", "COD", "Customer Name",
             "courier_partner", "worker_name", "worker_code", "worker_phone", "delivery_date", "delivery_time", "rider_event", "hub_code",
@@ -1060,12 +1060,12 @@
             return null;
         }
 
-        // Long cells are unreadable at a glance, so the short columns are capped.
+        // Long cells are unreadable at a glance, so "Customer Said" is capped.
         const POD_SHORT_MAX = 90;
 
         // Columns carrying OCR or model text, which must be HTML-escaped before preview.
         const POD_TEXT_COLS = new Set([
-            "POD Full Details", "POD Short Summary", "Customer Said", "POD AI Summary"
+            "POD Full Details", "Customer Said", "POD AI Summary"
         ]);
 
         // Optional second pass: hand the deterministic transcript to a language model
@@ -1099,8 +1099,8 @@
         async function buildPodFields(urls, consigneePhone) {
             const out = {
                 "POD Full Details": "No POD attached",
-                "POD Short Summary": "",
                 "POD Type": "No POD",
+                "Evidence From": "",
                 "Phone Match": "",
                 "Customer Said": "",
                 "POD Images": urls.length
@@ -1108,8 +1108,7 @@
             if (!urls.length) return out;
 
             const parts = [], customerLines = [], phones = [], kinds = [];
-            let lastCustomerLine = "", scene = "";
-            let unreachable = 0, failed = 0, readable = 0;
+            let unreachable = 0, failed = 0;
 
             for (let i = 0; i < urls.length; i++) {
                 const result = await analyzePodImage(urls[i]);
@@ -1118,10 +1117,7 @@
                     continue;
                 }
                 kinds.push(result.kind);
-                readable += result.readable || 0;
                 (result.customerLines || []).forEach(l => customerLines.push(l));
-                if (result.lastCustomerLine) lastCustomerLine = result.lastCustomerLine;
-                if (!scene && result.scene) scene = result.scene;
                 (result.phones || []).forEach(p => { if (!phones.includes(p)) phones.push(p); });
                 parts.push(urls.length > 1
                     ? `Image ${i + 1} of ${urls.length} — ${result.summary}`
@@ -1140,12 +1136,6 @@
 
             out["POD Full Details"] = parts.concat(notes).join("\n");
             out["POD Type"] = kinds.includes("screenshot") ? "Chat screenshot" : "Photo";
-            // For a chat the closing customer line is the punchline; for a photo the
-            // scene tags are the nearest equivalent. Say so plainly when the images
-            // carried nothing readable, rather than leaving the cell blank.
-            out["POD Short Summary"] = truncatePod(
-                lastCustomerLine || scene || (readable ? "" : "No readable text"),
-                POD_SHORT_MAX);
             out["Customer Said"] = truncatePod(customerLines.join(" / "), POD_SHORT_MAX);
 
             // A number in the POD that is not the consignee's suggests the courier
@@ -1267,6 +1257,11 @@
                         if (ai) {
                             item["POD AI Summary"] = ai.summary;
                             item["POD Signal"] = ai.signal;
+                            // Which side's own words drive the signal. A courier-side
+                            // contradiction is the stronger finding, so it is worth
+                            // being able to sort on separately.
+                            const SIDE = { CONSIGNEE: "Consignee", COURIER: "Courier", BOTH: "Both" };
+                            item["Evidence From"] = SIDE[ai.source] || "";
                         }
                     } catch (e) {
                         console.warn("POD analysis failed:", e);
@@ -1345,7 +1340,7 @@
             // "POD Full Details" is a multi-line transcript, so give it room. Excel
             // still needs "Wrap Text" switched on to lay the line breaks out.
             const POD_WIDTHS = {
-                "POD Full Details": 70, "POD Short Summary": 32,
+                "POD Full Details": 70, "Evidence From": 14,
                 "POD AI Summary": 55, "POD Signal": 13, "Customer Said": 40
             };
             ws['!cols'] = cols.map(c => ({ wch: POD_WIDTHS[c] || 20 }));
